@@ -21,12 +21,17 @@ import {
   TransactionPayload,
   CorruptedPayloadError,
   DuplicateTransactionError,
+  EvidenceStorageUnavailableError,
 } from './api';
 import {
   attachChecksumToPayload,
   verifyPayloadChecksum,
   CURRENT_CHECKSUM_VERSION,
 } from './checksum';
+import {
+  getOfflineEvidence,
+  removeOfflineEvidence,
+} from './offlineEvidence';
 
 export type DispatcherStatus = 'idle' | 'syncing' | 'paused';
 
@@ -65,6 +70,7 @@ export interface DispatchSummary {
   failed: number;
   duplicates: number;
   paused: boolean;
+  failureReason?: string;
 }
 
 export type DispatcherEventType =
@@ -423,6 +429,7 @@ export class OfflineBackgroundDispatcher {
     let failed = 0;
     let duplicates = 0;
     let paused = false;
+    let failureReason: string | undefined;
 
     this.log('info', `Starting sequential dispatch of ${queue.length} pending record(s)...`);
 
@@ -472,6 +479,21 @@ export class OfflineBackgroundDispatcher {
         this.quarantine(record, dispatchResult.errorMessage);
         quarantined++;
         // Corrupted payload does NOT count towards network failure circuit breaker
+      } else if (dispatchResult.outcome === 'blocked') {
+        failed += queue.length - i;
+        this.totalFailed++;
+        failureReason = dispatchResult.errorMessage;
+        remainingQueue.push(...queue.slice(i));
+        this.log(
+          'error',
+          `Dispatch paused for ${record.transaction_id}: ${failureReason}`
+        );
+        this.emit('item_failed', {
+          record,
+          error: failureReason,
+          blocked: true,
+        });
+        break;
       } else {
         // Transient network failure
         failed++;
@@ -509,7 +531,14 @@ export class OfflineBackgroundDispatcher {
       this.setStatus('idle', 'Sequential dispatch batch completed');
     }
 
-    const summary: DispatchSummary = { processed, quarantined, failed, duplicates, paused };
+    const summary: DispatchSummary = {
+      processed,
+      quarantined,
+      failed,
+      duplicates,
+      paused,
+      ...(failureReason ? { failureReason } : {}),
+    };
     this.log(
       'info',
       `Dispatch batch finished: ${processed} synced, ${quarantined} quarantined, ${failed} failed, ${remainingQueue.length} remaining.`
@@ -523,7 +552,7 @@ export class OfflineBackgroundDispatcher {
    * Dispatches a single record with local retry attempts before giving up.
    */
   private async dispatchSingleRecord(record: TransactionPayload): Promise<{
-    outcome: 'success' | 'duplicate' | 'corrupted' | 'failed';
+    outcome: 'success' | 'duplicate' | 'corrupted' | 'failed' | 'blocked';
     ack?: unknown;
     errorMessage?: string;
   }> {
@@ -531,9 +560,36 @@ export class OfflineBackgroundDispatcher {
 
     for (let attempt = 1; attempt <= attempts; attempt++) {
       try {
+        const evidence = record.evidence_pending
+          ? await getOfflineEvidence(record.transaction_id)
+          : undefined;
+        if (record.evidence_pending && !evidence) {
+          return {
+            outcome: 'corrupted',
+            errorMessage: 'The saved evidence photo is missing from this device.',
+          };
+        }
+
         const result = await submitTransactionLog(record, {
           retryDelaysMs: [], // Dispatcher controls the sequential record retry timing
+          ...(evidence
+            ? {
+                evidenceFile: evidence.blob,
+                evidenceFileName: evidence.fileName,
+              }
+            : {}),
         });
+        if (evidence) {
+          try {
+            await removeOfflineEvidence(record.transaction_id);
+          } catch (error) {
+            this.log(
+              'error',
+              `Could not remove the synced evidence photo for ${record.transaction_id}:`,
+              error
+            );
+          }
+        }
         return { outcome: 'success', ack: result };
       } catch (err: unknown) {
         if (err instanceof DuplicateTransactionError) {
@@ -541,6 +597,9 @@ export class OfflineBackgroundDispatcher {
         }
         if (err instanceof CorruptedPayloadError) {
           return { outcome: 'corrupted', errorMessage: (err as Error).message };
+        }
+        if (err instanceof EvidenceStorageUnavailableError) {
+          return { outcome: 'blocked', errorMessage: err.message };
         }
 
         const isLastAttempt = attempt === attempts;

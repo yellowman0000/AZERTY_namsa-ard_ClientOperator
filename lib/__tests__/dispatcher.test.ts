@@ -108,6 +108,50 @@ describe('Story 14-3 Subtask 2: Automated Sequential Background Dispatcher (Ball
       expect(dispatcher.isProcessed('TXN-FIFO-2')).toBe(true);
       expect(dispatcher.isProcessed('TXN-FIFO-3')).toBe(true);
     });
+
+    it('includes the server receipt in the success event for an offline daily submission', async () => {
+      const record: TransactionPayload = {
+        ...createRecord('TXN-OFFLINE-RECEIPT', 25.5),
+        reading_type: 'DAILY_VOLUME',
+        operator_id: 'OP-104',
+        reported_cash: 950,
+      };
+      const receipt = {
+        receiptId: 'RCPT-OFFLINE-1',
+        transactionId: record.transaction_id,
+        kioskId: record.kiosk_id,
+        operatorId: record.operator_id,
+        meterVolume: record.meter_volume,
+        reportedCash: record.reported_cash,
+        recordedAt: record.recorded_at,
+        checksum: 'a'.repeat(64),
+        hash: 'a'.repeat(64),
+        signature: 'b'.repeat(64),
+        algorithm: 'SHA-256',
+        issuedAt: record.recorded_at,
+        signedAt: record.recorded_at,
+      };
+
+      globalThis.fetch = mock(async () =>
+        new Response(JSON.stringify({ ack: true, logId: 'log-offline-1', receipt }), {
+          status: 201,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      ) as unknown as typeof fetch;
+
+      const events: DispatcherEvent[] = [];
+      dispatcher.subscribe((event) => events.push(event));
+      await dispatcher.enqueue(record);
+      const summary = await dispatcher.processQueue();
+
+      const successEvent = events.find((event) => event.type === 'item_success');
+      expect(summary.processed).toBe(1);
+      expect(successEvent?.data.record).toMatchObject({
+        transaction_id: record.transaction_id,
+        reading_type: 'DAILY_VOLUME',
+      });
+      expect(successEvent?.data.ack).toMatchObject({ receipt });
+    });
   });
 
   describe('Retry Strategy on Transient Failures', () => {

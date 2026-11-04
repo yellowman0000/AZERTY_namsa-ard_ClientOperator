@@ -1,16 +1,38 @@
 import { generatePayloadChecksum, CURRENT_CHECKSUM_VERSION } from './checksum';
-import { fetchWithRetry } from './http';
+import { fetchWithRetry, fetchWithTimeout } from './http';
 
 export interface TransactionPayload {
   transaction_id: string;
   kiosk_id: string;
   meter_volume: number;
   recorded_at: string;
+  reading_type?: 'CUMULATIVE_METER' | 'DAILY_VOLUME';
+  operator_id?: string;
+  reported_cash?: number;
+  evidence_path?: string;
+  evidence_pending?: boolean;
   checksum?: string;
   checksum_version?: string;
   cached_at?: string;
   quarantined_at?: string;
   quarantine_reason?: string;
+}
+
+export interface SignedReceipt {
+  receiptId: string;
+  transactionId: string;
+  kioskId: string;
+  operatorId: string;
+  meterVolume: number;
+  reportedCash: number;
+  recordedAt: string;
+  checksum: string;
+  hash: string;
+  signature: string;
+  algorithm: 'SHA-256';
+  evidencePath?: string;
+  issuedAt: string;
+  signedAt: string;
 }
 
 export class CorruptedPayloadError extends Error {
@@ -27,10 +49,19 @@ export class DuplicateTransactionError extends Error {
   }
 }
 
+export class EvidenceStorageUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'EvidenceStorageUnavailableError';
+  }
+}
+
 export interface SubmitLogOptions {
   serverUrl?: string;
   retryDelaysMs?: number[];
   timeoutMs?: number;
+  evidenceFile?: Blob;
+  evidenceFileName?: string;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -60,11 +91,78 @@ function isDuplicateResponse(value: unknown, transactionId: string): boolean {
 
 function getStateConflictReason(value: unknown): string | undefined {
   if (!isRecord(value) || value.error !== 'STATE_CONFLICT') return undefined;
-  if (typeof value.reason === 'string') return value.reason;
+  if (typeof value.reason === 'string') {
+    const detail = getErrorMessage(value);
+    return detail ? `${value.reason}: ${detail}` : value.reason;
+  }
   return (
     getErrorMessage(value) ||
     'The server rejected this reading because it conflicts with its current state.'
   );
+}
+
+export function parseSignedReceipt(value: unknown): SignedReceipt | undefined {
+  if (!isRecord(value)) return undefined;
+
+  const receiptId = value.receiptId;
+  const transactionId = value.transactionId;
+  const kioskId = value.kioskId;
+  const operatorId = value.operatorId;
+  const recordedAt = value.recordedAt;
+  const checksum = value.checksum;
+  const hash = value.hash;
+  const signature = value.signature;
+  const evidencePath = value.evidencePath;
+  const issuedAt = value.issuedAt;
+  const signedAt = value.signedAt;
+  if (
+    typeof receiptId !== 'string' ||
+    !receiptId ||
+    typeof transactionId !== 'string' ||
+    typeof kioskId !== 'string' ||
+    typeof operatorId !== 'string' ||
+    typeof recordedAt !== 'string' ||
+    typeof checksum !== 'string' ||
+    typeof hash !== 'string' ||
+    typeof signature !== 'string' ||
+    typeof issuedAt !== 'string' ||
+    typeof signedAt !== 'string' ||
+    typeof value.meterVolume !== 'number' ||
+    !Number.isFinite(value.meterVolume) ||
+    typeof value.reportedCash !== 'number' ||
+    !Number.isFinite(value.reportedCash) ||
+    value.algorithm !== 'SHA-256'
+  ) {
+    return undefined;
+  }
+
+  if (
+    !/^[a-f\d]{64}$/i.test(checksum) ||
+    hash !== checksum ||
+    !/^[a-f\d]{64}$/i.test(signature) ||
+    Number.isNaN(Date.parse(issuedAt)) ||
+    Number.isNaN(Date.parse(recordedAt)) ||
+    Number.isNaN(Date.parse(signedAt))
+  ) {
+    return undefined;
+  }
+
+  return {
+    receiptId,
+    transactionId,
+    kioskId,
+    operatorId,
+    meterVolume: value.meterVolume,
+    reportedCash: value.reportedCash,
+    recordedAt,
+    checksum,
+    hash,
+    signature,
+    ...(typeof evidencePath === 'string' ? { evidencePath } : {}),
+    algorithm: 'SHA-256',
+    issuedAt,
+    signedAt,
+  };
 }
 
 /**
@@ -81,7 +179,13 @@ function getStateConflictReason(value: unknown): string | undefined {
 export async function submitTransactionLog(
   payload: TransactionPayload | Omit<TransactionPayload, 'checksum'>,
   serverUrlOrOptions: string | SubmitLogOptions = '/api/kiosk/logs'
-): Promise<{ ack: boolean; status?: string; logId?: string }> {
+): Promise<{
+  ack: boolean;
+  status?: string;
+  logId?: string;
+  evidencePath?: string;
+  receipt?: SignedReceipt;
+}> {
   const options: SubmitLogOptions =
     typeof serverUrlOrOptions === 'string'
       ? { serverUrl: serverUrlOrOptions }
@@ -89,6 +193,54 @@ export async function submitTransactionLog(
 
   const serverUrl = options.serverUrl || '/api/kiosk/logs';
   const retryDelaysMs = options.retryDelaysMs;
+  let evidencePath = payload.evidence_path;
+
+  if (options.evidenceFile) {
+    const formData = new FormData();
+    formData.append(
+      'file',
+      options.evidenceFile,
+      options.evidenceFileName || `evidence-${payload.transaction_id}`
+    );
+    const evidenceUrl = `${serverUrl.replace(/\/+$/, '')}/${encodeURIComponent(payload.transaction_id)}/evidence`;
+    let uploadResponse: Response;
+    try {
+      uploadResponse = await fetchWithTimeout(
+        evidenceUrl,
+        { method: 'POST', body: formData },
+        options.timeoutMs ?? 30000
+      );
+    } catch (error) {
+      const detail = error instanceof Error ? ` ${error.message}` : '';
+      throw new EvidenceStorageUnavailableError(
+        `Could not reach the server's evidence storage.${detail} The reading and photo remain queued for sync.`
+      );
+    }
+    if (!uploadResponse.ok) {
+      const errorBody: unknown = await uploadResponse.json().catch(() => null);
+      const detail = getErrorMessage(errorBody);
+      if (uploadResponse.status === 503) {
+        throw new EvidenceStorageUnavailableError(
+          detail ||
+            'Evidence storage is not configured on the server. Ask an administrator to configure it; this submission remains queued.'
+        );
+      }
+      if (uploadResponse.status >= 400 && uploadResponse.status < 500) {
+        throw new CorruptedPayloadError(
+          detail || `Server rejected evidence image (HTTP ${uploadResponse.status}).`
+        );
+      }
+      throw new Error(
+        detail || `Evidence upload failed with HTTP ${uploadResponse.status}.`
+      );
+    }
+
+    const uploadResult: unknown = await uploadResponse.json();
+    if (!isRecord(uploadResult) || typeof uploadResult.evidencePath !== 'string') {
+      throw new Error('Evidence upload response did not contain a storage path.');
+    }
+    evidencePath = uploadResult.evidencePath;
+  }
 
   // Use existing stored checksum if available; otherwise generate deterministic checksum
   let checksum = 'checksum' in payload ? payload.checksum : undefined;
@@ -106,13 +258,21 @@ export async function submitTransactionLog(
   const bodyPayload = {
     transactionId: payload.transaction_id,
     kioskId: payload.kiosk_id,
+    operatorId: payload.operator_id,
     meterVolume: payload.meter_volume,
+    reportedCash: payload.reported_cash,
+    readingType: payload.reading_type,
+    evidencePath,
     recordedAt: payload.recorded_at,
     checksum,
     // snake_case preserved for client & legacy servers
     transaction_id: payload.transaction_id,
     kiosk_id: payload.kiosk_id,
+    operator_id: payload.operator_id,
     meter_volume: payload.meter_volume,
+    reported_cash: payload.reported_cash,
+    reading_type: payload.reading_type,
+    evidence_path: evidencePath,
     recorded_at: payload.recorded_at,
     checksum_version: checksumVersion,
   };
@@ -167,18 +327,40 @@ export async function submitTransactionLog(
   }
 
   if (result.ack === true) {
+    const parsedReceipt = parseSignedReceipt(result.receipt);
+    const responseEvidencePath =
+      typeof result.evidencePath === 'string'
+        ? result.evidencePath
+        : parsedReceipt?.evidencePath;
+    const receipt =
+      parsedReceipt && responseEvidencePath && !parsedReceipt.evidencePath
+        ? { ...parsedReceipt, evidencePath: responseEvidencePath }
+        : parsedReceipt;
     return {
       ack: true,
       ...(typeof result.status === 'string' ? { status: result.status } : {}),
       ...(typeof result.logId === 'string' ? { logId: result.logId } : {}),
+      ...(responseEvidencePath ? { evidencePath: responseEvidencePath } : {}),
+      ...(receipt ? { receipt } : {}),
     };
   }
 
   if (result.success === true && result.transactionId === payload.transaction_id) {
+    const parsedReceipt = parseSignedReceipt(result.receipt);
+    const responseEvidencePath =
+      typeof result.evidencePath === 'string'
+        ? result.evidencePath
+        : parsedReceipt?.evidencePath;
+    const receipt =
+      parsedReceipt && responseEvidencePath && !parsedReceipt.evidencePath
+        ? { ...parsedReceipt, evidencePath: responseEvidencePath }
+        : parsedReceipt;
     return {
       ack: true,
       status: 'saved',
       ...(typeof result.logId === 'string' ? { logId: result.logId } : {}),
+      ...(responseEvidencePath ? { evidencePath: responseEvidencePath } : {}),
+      ...(receipt ? { receipt } : {}),
     };
   }
 

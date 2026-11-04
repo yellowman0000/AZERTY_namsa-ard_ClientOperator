@@ -7,11 +7,19 @@ import { useKioskHeartbeat } from '../lib/heartbeat';
 import {
   CorruptedPayloadError,
   DuplicateTransactionError,
+  EvidenceStorageUnavailableError,
+  parseSignedReceipt,
   submitTransactionLog,
+  type SignedReceipt,
   type TransactionPayload,
 } from '../lib/api';
 import { ConnectionDroppedError, connectionStatus } from '../lib/http';
 import { listenForReconnection } from '../lib/networkListener';
+import {
+  removeOfflineEvidence,
+  saveOfflineEvidence,
+} from '../lib/offlineEvidence';
+import ProofReceipt from './proof-receipt';
 import {
   PROCESSED_KEY,
   QUEUE_KEY,
@@ -20,6 +28,9 @@ import {
 } from '../lib/queue';
 
 const kioskId = process.env.NEXT_PUBLIC_KIOSK_ID || 'KIOSK-001';
+const configuredOperatorId = process.env.NEXT_PUBLIC_OPERATOR_ID || '';
+const maxEvidenceSize = 5 * 1024 * 1024;
+const allowedEvidenceTypes = ['image/jpeg', 'image/png', 'image/webp'];
 
 type Notice = { kind: 'success' | 'warning' | 'error'; text: string };
 
@@ -50,11 +61,73 @@ const getNetworkStatus = () => typeof navigator === 'undefined' || navigator.onL
 const getPendingSnapshot = () => JSON.stringify(syncDispatcher.getQueue());
 const getQuarantineSnapshot = () => syncDispatcher.getQuarantineQueue().length;
 
+function receiptMatchesSubmission(
+  receipt: SignedReceipt,
+  record: TransactionPayload,
+  requiresEvidence = false
+) {
+  return (
+    receipt.transactionId === record.transaction_id &&
+    receipt.kioskId === record.kiosk_id &&
+    receipt.operatorId === record.operator_id &&
+    receipt.meterVolume === record.meter_volume &&
+    receipt.reportedCash === record.reported_cash &&
+    Date.parse(receipt.recordedAt) === Date.parse(record.recorded_at) &&
+    (!requiresEvidence || Boolean(receipt.evidencePath))
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isTransactionPayload(value: unknown): value is TransactionPayload {
+  if (!isRecord(value)) return false;
+  const record = value;
+  return (
+    typeof record.transaction_id === 'string' &&
+    typeof record.kiosk_id === 'string' &&
+    typeof record.meter_volume === 'number' &&
+    typeof record.recorded_at === 'string'
+  );
+}
+
 export default function OperatorConsole() {
   const [volume, setVolume] = useState('');
+  const [cash, setCash] = useState('');
+  const [operatorId, setOperatorId] = useState(configuredOperatorId);
+  const [evidencePhoto, setEvidencePhoto] = useState<File | null>(null);
+  const [evidencePreview, setEvidencePreview] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [notice, setNotice] = useState<Notice | null>(null);
+  const [receipts, setReceipts] = useState<SignedReceipt[]>([]);
   const flushing = useRef(false);
+  const receiptWarning = useRef(false);
+  const evidenceInput = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!evidencePhoto) return;
+
+    let cancelled = false;
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (!cancelled && typeof reader.result === 'string') {
+        setEvidencePreview(reader.result);
+      }
+    };
+    reader.onerror = () => {
+      if (!cancelled) {
+        console.error('[Operator] Could not preview the selected evidence photo:', reader.error);
+        setNotice({ kind: 'error', text: 'Could not preview the selected photo. Please choose it again.' });
+      }
+    };
+    reader.readAsDataURL(evidencePhoto);
+
+    return () => {
+      cancelled = true;
+      reader.abort();
+    };
+  }, [evidencePhoto]);
 
   const isOnline = useSyncExternalStore(subscribeToNetwork, getNetworkStatus, () => true);
   const connection = useSyncExternalStore(
@@ -74,13 +147,26 @@ export default function OperatorConsole() {
   const flushPending = useCallback(async () => {
     if (flushing.current || syncDispatcher.getQueue().length === 0) return;
     flushing.current = true;
+    receiptWarning.current = false;
     try {
       const result = await syncDispatcher.processQueue();
       if (result.processed > 0) {
-        setNotice({
-          kind: 'success',
-          text: `${result.processed} saved ${result.processed === 1 ? 'entry' : 'entries'} synchronized with the server.`,
-        });
+        setNotice(
+          result.failureReason
+            ? {
+                kind: 'warning',
+                text: `${result.processed} entries synced, but ${result.failed} remain queued. ${result.failureReason}`,
+              }
+            : receiptWarning.current
+            ? {
+                kind: 'warning',
+                text: 'Some submissions synced without a matching proof receipt. Check the entries below and contact a supervisor if a receipt is missing.',
+              }
+            : {
+                kind: 'success',
+                text: `${result.processed} saved ${result.processed === 1 ? 'entry' : 'entries'} synchronized. Proof receipts are shown below.`,
+              }
+        );
       } else if (result.quarantined > 0) {
         setNotice({
           kind: 'warning',
@@ -90,6 +176,11 @@ export default function OperatorConsole() {
         setNotice({
           kind: 'warning',
           text: 'Automatic sync is paused after repeated failures. Pending entries remain safely stored.',
+        });
+      } else if (result.failureReason) {
+        setNotice({
+          kind: 'warning',
+          text: `${result.failed} ${result.failed === 1 ? 'entry remains' : 'entries remain'} safely queued. ${result.failureReason}`,
         });
       }
     } catch (error) {
@@ -117,9 +208,60 @@ export default function OperatorConsole() {
     onHeartbeat: flushPending,
   });
 
-  const queueEntry = async (record: TransactionPayload, reason: string) => {
+  useEffect(() => {
+    return syncDispatcher.subscribe((event) => {
+      if (event.type !== 'item_success') return;
+
+      const record = event.data.record;
+      const ack = event.data.ack;
+      if (!isTransactionPayload(record) || !isRecord(ack)) return;
+
+      const receipt = parseSignedReceipt(ack.receipt);
+      if (!receipt ||
+        !receiptMatchesSubmission(receipt, record, record.evidence_pending === true)) {
+        if (record.reading_type === 'DAILY_VOLUME') {
+          receiptWarning.current = true;
+        }
+        return;
+      }
+
+      setReceipts((current) =>
+        current.some((existing) => existing.receiptId === receipt.receiptId)
+          ? current
+          : [...current, receipt]
+      );
+      setNotice({
+        kind: 'success',
+        text: `Offline submission ${record.transaction_id} synced. Its proof receipt is ready below.`,
+      });
+    });
+  }, []);
+
+  const queueEntry = async (
+    record: TransactionPayload,
+    reason: string,
+    photo?: File | null
+  ) => {
+    const queuedRecord = photo ? { ...record, evidence_pending: true } : record;
+    let evidenceSaved = false;
     try {
-      const enqueued = await syncDispatcher.enqueue(record);
+      if (photo) {
+        await saveOfflineEvidence(record.transaction_id, photo);
+        evidenceSaved = true;
+      }
+
+      const accepted = await syncDispatcher.enqueue(queuedRecord);
+      const enqueued =
+        accepted &&
+        syncDispatcher
+          .getQueue()
+          .some((queued) => queued.transaction_id === record.transaction_id);
+      if (accepted && !enqueued) {
+        throw new Error('The offline transaction queue did not persist the entry.');
+      }
+      if (!enqueued && evidenceSaved) {
+        await removeOfflineEvidence(record.transaction_id);
+      }
       setNotice(
         enqueued
           ? { kind: 'warning', text: reason }
@@ -127,6 +269,13 @@ export default function OperatorConsole() {
       );
       return enqueued;
     } catch (error) {
+      if (evidenceSaved) {
+        try {
+          await removeOfflineEvidence(record.transaction_id);
+        } catch (cleanupError) {
+          console.error('[Operator] Could not clean up an unqueued evidence photo:', cleanupError);
+        }
+      }
       console.error('[Operator] Could not persist transaction locally:', error);
       setNotice({
         kind: 'error',
@@ -140,32 +289,88 @@ export default function OperatorConsole() {
     event.preventDefault();
     if (submitting) return;
 
+    if (
+      evidencePhoto &&
+      (!allowedEvidenceTypes.includes(evidencePhoto.type) ||
+        evidencePhoto.size > maxEvidenceSize)
+    ) {
+      setNotice({
+        kind: 'error',
+        text: 'Choose a JPEG, PNG, or WebP photo that is 5 MB or smaller.',
+      });
+      return;
+    }
+
     const meterVolume = Number(volume);
     if (!Number.isFinite(meterVolume) || meterVolume <= 0) {
       setNotice({ kind: 'error', text: 'Enter a water volume greater than zero.' });
       return;
     }
 
+    const submittedBy = operatorId.trim();
+    if (!submittedBy) {
+      setNotice({ kind: 'error', text: 'Enter the Field Operator ID.' });
+      return;
+    }
+
+    const reportedCash = Number(cash);
+    if (cash.trim() === '' || !Number.isFinite(reportedCash) || reportedCash < 0) {
+      setNotice({ kind: 'error', text: 'Enter cash collected as zero or a positive amount.' });
+      return;
+    }
+
     const record: TransactionPayload = {
       transaction_id: crypto.randomUUID(),
       kiosk_id: kioskId,
+      reading_type: 'DAILY_VOLUME',
+      operator_id: submittedBy,
       meter_volume: meterVolume,
+      reported_cash: reportedCash,
       recorded_at: new Date().toISOString(),
     };
-
     if (!navigator.onLine || !isOnline || connection === 'dropped') {
-      if (await queueEntry(record, 'Offline entry saved on this device and will sync when the server returns.')) {
+      if (await queueEntry(
+        record,
+        'Offline entry saved on this device and will sync when the server returns.',
+        evidencePhoto
+      )) {
         setVolume('');
+        setCash('');
+        setEvidencePhoto(null);
+        setEvidencePreview(null);
+        if (evidenceInput.current) evidenceInput.current.value = '';
       }
       return;
     }
 
     setSubmitting(true);
     try {
-      await submitTransactionLog(record);
+      const result = await submitTransactionLog(record, {
+        ...(evidencePhoto ? { evidenceFile: evidencePhoto, evidenceFileName: evidencePhoto.name } : {}),
+      });
       syncDispatcher.markProcessed(record.transaction_id);
       setVolume('');
-      setNotice({ kind: 'success', text: 'Entry acknowledged by the server and saved.' });
+      setCash('');
+      setEvidencePhoto(null);
+      setEvidencePreview(null);
+      if (evidenceInput.current) evidenceInput.current.value = '';
+      const responseReceipt = result.receipt;
+      if (
+        responseReceipt &&
+        receiptMatchesSubmission(responseReceipt, record, Boolean(evidencePhoto))
+      ) {
+        setReceipts((current) =>
+          current.some((existing) => existing.receiptId === responseReceipt.receiptId)
+            ? current
+            : [...current, responseReceipt]
+        );
+        setNotice({ kind: 'success', text: 'Daily submission saved and proof receipt issued.' });
+      } else {
+        setNotice({
+          kind: 'warning',
+          text: 'The server saved this submission but did not return a matching proof receipt. Do not resubmit it; contact a supervisor.',
+        });
+      }
     } catch (error) {
       if (error instanceof DuplicateTransactionError) {
         setNotice({ kind: 'error', text: 'The server already has this transaction. No duplicate was saved.' });
@@ -173,11 +378,18 @@ export default function OperatorConsole() {
         syncDispatcher.quarantine(record, error.message);
         setNotice({ kind: 'error', text: `The server rejected this entry: ${error.message}` });
       } else {
-        const message =
-          error instanceof ConnectionDroppedError
+        const message = error instanceof EvidenceStorageUnavailableError
+          ? `Entry and photo saved on this device. Photo sync is waiting for server setup: ${error.message}`
+          : error instanceof ConnectionDroppedError
             ? 'Connection was lost. Entry saved on this device for later sync.'
             : 'Server unavailable. Entry saved on this device for later sync.';
-        if (await queueEntry(record, message)) setVolume('');
+        if (await queueEntry(record, message, evidencePhoto)) {
+          setVolume('');
+          setCash('');
+          setEvidencePhoto(null);
+          setEvidencePreview(null);
+          if (evidenceInput.current) evidenceInput.current.value = '';
+        }
       }
     } finally {
       setSubmitting(false);
@@ -217,8 +429,8 @@ export default function OperatorConsole() {
         <div className="operator-heading">
           <div>
             <p className="eyebrow">KIOSK OPERATIONS · {kioskId}</p>
-            <h1>Water volume entry</h1>
-            <p className="heading-copy">Record a meter reading. Entries are kept safely if the connection drops.</p>
+            <h1>Daily cash &amp; liter submission</h1>
+            <p className="heading-copy">Submit the operator’s daily meter volume and cash total. Entries are kept safely if the connection drops.</p>
           </div>
           <div className="server-heartbeat">
             <span className={`heartbeat-indicator indicator-${status}`} />
@@ -234,8 +446,8 @@ export default function OperatorConsole() {
             <div className="section-title">
               <span className="step-badge">01</span>
               <div>
-                <p className="card-kicker">NEW TRANSACTION</p>
-                <h2 id="entry-title">Enter water volume</h2>
+                <p className="card-kicker">FIELD OPERATOR SUBMISSION</p>
+                <h2 id="entry-title">Submit daily totals</h2>
               </div>
             </div>
 
@@ -258,9 +470,100 @@ export default function OperatorConsole() {
                 />
                 <span className="volume-unit">L</span>
               </div>
-              <p className="field-hint">Use the current reading from the kiosk water meter.</p>
+              <p className="field-hint">Enter the liters dispensed for this daily submission.</p>
+
+              <div className="submission-fields">
+                <label className="submission-field" htmlFor="operator-id">
+                  Operator ID
+                  <input
+                    id="operator-id"
+                    type="text"
+                    autoComplete="off"
+                    maxLength={64}
+                    value={operatorId}
+                    onChange={(event) => setOperatorId(event.target.value)}
+                    required
+                  />
+                </label>
+                <label className="submission-field" htmlFor="reported-cash">
+                  Cash submitted
+                  <span className="submission-input-wrap">
+                    <input
+                      id="reported-cash"
+                      inputMode="decimal"
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      placeholder="0.00"
+                      value={cash}
+                      onChange={(event) => setCash(event.target.value)}
+                      required
+                    />
+                  </span>
+                </label>
+              </div>
+              <div className="evidence-field">
+                <span className="evidence-label">
+                  <label htmlFor="evidence-photo">Reading evidence photo</label>
+                  <span>Optional</span>
+                </span>
+                <input
+                  ref={evidenceInput}
+                  id="evidence-photo"
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  capture="environment"
+                  onChange={(event) => {
+                    const file = event.currentTarget.files?.[0] ?? null;
+                    if (
+                      file &&
+                      (!allowedEvidenceTypes.includes(file.type) ||
+                        file.size > maxEvidenceSize)
+                    ) {
+                      event.currentTarget.value = '';
+                      setEvidencePhoto(null);
+                      setEvidencePreview(null);
+                      setNotice({
+                        kind: 'error',
+                        text: 'Choose a JPEG, PNG, or WebP photo that is 5 MB or smaller.',
+                      });
+                      return;
+                    }
+                    setEvidencePreview(null);
+                    setEvidencePhoto(file);
+                    if (file) setNotice(null);
+                  }}
+                  disabled={submitting}
+                />
+                <span className="field-hint">
+                  Attach a JPEG, PNG, or WebP up to 5 MB. Offline photos stay on this device until sync.
+                </span>
+                {evidencePhoto && evidencePreview && (
+                  <span className="evidence-preview">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={evidencePreview} alt="Selected reading evidence preview" />
+                    <span>
+                      <strong>{evidencePhoto.name}</strong>
+                      <small>{(evidencePhoto.size / (1024 * 1024)).toFixed(2)} MB</small>
+                    </span>
+                    <button
+                      type="button"
+                      className="evidence-remove"
+                      onClick={() => {
+                        setEvidencePhoto(null);
+                        setEvidencePreview(null);
+                        if (evidenceInput.current) evidenceInput.current.value = '';
+                      }}
+                      disabled={submitting}
+                      aria-label="Remove evidence photo"
+                    >
+                      Remove
+                    </button>
+                  </span>
+                )}
+              </div>
               <button className="submit-button" type="submit" disabled={submitting}>
-                <span>{submitting ? 'Saving entry…' : 'Save water entry'}</span>
+                <span>{submitting ? 'Submitting daily totals…' : 'Submit daily totals'}</span>
                 <span className="button-arrow" aria-hidden="true">→</span>
               </button>
             </form>
@@ -271,7 +574,7 @@ export default function OperatorConsole() {
               </p>
             )}
             <p className="integrity-note">
-              Each saved entry gets a unique ID and a SHA-256 integrity checksum.
+              The server returns a signed SHA-256 proof receipt after saving your submission.
             </p>
           </section>
 
@@ -329,10 +632,17 @@ export default function OperatorConsole() {
             )}
           </aside>
         </div>
+        {receipts.map((item, index) => (
+          <ProofReceipt
+            key={item.receiptId}
+            receipt={item}
+            titleId={`receipt-title-${index}`}
+          />
+        ))}
       </section>
       <footer className="operator-footer">
         <span>Nam Sa-ard · Operator</span>
-        <span>Device storage is limited by available browser space</span>
+        <span>Print the proof receipt for your daily records</span>
       </footer>
     </main>
   );

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'bun:test';
 import {
   CorruptedPayloadError,
   DuplicateTransactionError,
+  EvidenceStorageUnavailableError,
   submitTransactionLog,
   type TransactionPayload,
 } from '../api';
@@ -29,6 +30,138 @@ describe('transaction server acknowledgements', () => {
     await expect(
       submitTransactionLog(payload, { serverUrl: 'http://localhost:3001/api/kiosk/logs', retryDelaysMs: [] })
     ).resolves.toMatchObject({ ack: true, logId: 'log-1' });
+  });
+
+  it('sends operator totals and returns the signed proof receipt', async () => {
+    const submission = {
+      ...payload,
+      reading_type: 'DAILY_VOLUME' as const,
+      operator_id: 'OP-104',
+      reported_cash: 950,
+    };
+    const receipt = {
+      receiptId: 'RCPT-test',
+      transactionId: submission.transaction_id,
+      kioskId: submission.kiosk_id,
+      operatorId: submission.operator_id,
+      meterVolume: submission.meter_volume,
+      reportedCash: submission.reported_cash,
+      recordedAt: submission.recorded_at,
+      checksum: 'a'.repeat(64),
+      hash: 'a'.repeat(64),
+      signature: 'b'.repeat(64),
+      algorithm: 'SHA-256',
+      issuedAt: '2026-10-19T00:00:01.000Z',
+      signedAt: '2026-10-19T00:00:01.000Z',
+    };
+    let requestBody = '';
+    globalThis.fetch = (async (_input, init) => {
+      if (typeof init?.body === 'string') requestBody = init.body;
+      return new Response(JSON.stringify({ ack: true, logId: 'log-3', receipt }), {
+        status: 201,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }) as typeof fetch;
+
+    await expect(
+      submitTransactionLog(submission, {
+        serverUrl: 'http://localhost:3001/api/kiosk/logs',
+        retryDelaysMs: [],
+      })
+    ).resolves.toMatchObject({ ack: true, logId: 'log-3', receipt });
+
+    expect(JSON.parse(requestBody)).toMatchObject({
+      operatorId: 'OP-104',
+      reportedCash: 950,
+      readingType: 'DAILY_VOLUME',
+    });
+  });
+
+  it('uploads reading evidence before posting the log and links it in the receipt', async () => {
+    const evidencePath = `test-transaction/${'a'.repeat(64)}.jpg`;
+    const receipt = {
+      receiptId: 'RCPT-evidence',
+      transactionId: payload.transaction_id,
+      kioskId: payload.kiosk_id,
+      operatorId: 'OP-104',
+      meterVolume: payload.meter_volume,
+      reportedCash: 950,
+      recordedAt: payload.recorded_at,
+      checksum: 'a'.repeat(64),
+      hash: 'a'.repeat(64),
+      signature: 'b'.repeat(64),
+      algorithm: 'SHA-256',
+      evidencePath,
+      issuedAt: '2026-10-19T00:00:01.000Z',
+      signedAt: '2026-10-19T00:00:01.000Z',
+    };
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    globalThis.fetch = (async (input, init) => {
+      calls.push({ url: String(input), init });
+      if (calls.length === 1) {
+        return new Response(JSON.stringify({ evidencePath }), {
+          status: 201,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      return new Response(JSON.stringify({ ack: true, logId: 'log-evidence', receipt }), {
+        status: 201,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }) as typeof fetch;
+
+    const photo = new Blob([new Uint8Array([0xff, 0xd8, 0xff])], {
+      type: 'image/jpeg',
+    });
+    const result = await submitTransactionLog(
+      { ...payload, operator_id: 'OP-104', reported_cash: 950 },
+      {
+        serverUrl: 'http://localhost:3001/api/kiosk/logs',
+        retryDelaysMs: [],
+        evidenceFile: photo,
+        evidenceFileName: 'meter-reading.jpg',
+      }
+    );
+
+    expect(calls).toHaveLength(2);
+    expect(calls[0].url).toBe(
+      `http://localhost:3001/api/kiosk/logs/${payload.transaction_id}/evidence`
+    );
+    expect(calls[0].init?.body).toBeInstanceOf(FormData);
+    expect(calls[1].url).toBe('http://localhost:3001/api/kiosk/logs');
+    expect(JSON.parse(String(calls[1].init?.body))).toMatchObject({
+      evidencePath,
+      evidence_path: evidencePath,
+    });
+    expect(result).toMatchObject({
+      ack: true,
+      logId: 'log-evidence',
+      evidencePath,
+      receipt: { evidencePath },
+    });
+  });
+
+  it('surfaces evidence-storage configuration failures as a server error, not a dropped connection', async () => {
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          statusCode: 503,
+          error: 'Service Unavailable',
+          message:
+            'Evidence storage is not configured. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY on the server.',
+        }),
+        { status: 503, headers: { 'Content-Type': 'application/json' } }
+      )) as typeof fetch;
+
+    await expect(
+      submitTransactionLog(payload, {
+        serverUrl: 'http://localhost:3001/api/kiosk/logs',
+        retryDelaysMs: [],
+        evidenceFile: new Blob([new Uint8Array([0xff, 0xd8, 0xff])], {
+          type: 'image/jpeg',
+        }),
+      })
+    ).rejects.toThrow(EvidenceStorageUnavailableError);
   });
 
   it('accepts the NestJS server success response for the matching transaction', async () => {
@@ -92,7 +225,13 @@ describe('transaction server acknowledgements', () => {
           ack: false,
           error: 'STATE_CONFLICT',
           reason: 'Reading is older than the latest server reading.',
-          message: 'Meter state conflict.',
+          message: 'Meter reading 50 at 2026-10-17T11:00:00.000Z is lower than older server reading 100 at 2026-10-17T10:00:00.000Z (txn: TXN-OLDER) for kiosk "KIOSK-001".',
+          conflictingRecord: {
+            transactionId: 'TXN-OLDER',
+            kioskId: 'KIOSK-001',
+            meterVolume: 100,
+            recordedAt: '2026-10-17T10:00:00.000Z',
+          },
         }),
         {
           status: 409,
@@ -100,9 +239,20 @@ describe('transaction server acknowledgements', () => {
         }
       )) as typeof fetch;
 
-    await expect(
-      submitTransactionLog(payload, { serverUrl: 'http://localhost:3001/api/kiosk/logs', retryDelaysMs: [] })
-    ).rejects.toBeInstanceOf(CorruptedPayloadError);
+    let conflictError: unknown;
+    try {
+      await submitTransactionLog(payload, {
+        serverUrl: 'http://localhost:3001/api/kiosk/logs',
+        retryDelaysMs: [],
+      });
+    } catch (error) {
+      conflictError = error;
+    }
+
+    expect(conflictError).toBeInstanceOf(CorruptedPayloadError);
+    expect(conflictError).toMatchObject({
+      message: expect.stringContaining('TXN-OLDER'),
+    });
   });
 
   it('does not accept a successful HTTP response without a transaction acknowledgement', async () => {
