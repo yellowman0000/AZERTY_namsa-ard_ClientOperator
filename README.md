@@ -21,7 +21,7 @@ npm install
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000). The operator posts heartbeats to `/api/kiosk/heartbeat`, evidence photos to `/api/kiosk/logs/:transactionId/evidence`, and transaction logs to `/api/kiosk/logs`. Configure the server's private Supabase Storage bucket and `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` before using photo uploads; the service-role key belongs only in the server environment.
+Open [http://localhost:3000](http://localhost:3000). The operator posts heartbeats to `/api/kiosk/heartbeat`, evidence photos to `/api/kiosk/logs/:transactionId/evidence`, and transaction logs to `/api/kiosk/logs`. The evidence upload returns a stable `proofImageUrl`, which is submitted with the daily log and can be opened from the receipt. The server stores photo bytes in PostgreSQL, so ensure its database schema has been updated with `bunx prisma db push`.
 
 ## Offline check
 

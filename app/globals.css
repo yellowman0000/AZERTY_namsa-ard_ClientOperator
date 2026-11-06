@@ -738,14 +738,48 @@ input {
 
 .proof-receipt {
   margin-top: 22px;
-  padding: clamp(24px, 4vw, 36px);
+  padding: 18px 22px;
   border: 1px solid rgba(11, 37, 48, 0.08);
-  border-radius: 26px;
+  border-radius: 18px;
   background: #fff;
-  box-shadow: 0 12px 35px rgba(11, 37, 48, 0.035);
+  box-shadow: 0 8px 24px rgba(11, 37, 48, 0.03);
 }
 
-.receipt-topline,
+.receipt-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.receipt-summary::-webkit-details-marker {
+  display: none;
+}
+
+.receipt-summary-copy {
+  min-width: 0;
+}
+
+.receipt-summary .card-kicker {
+  margin-bottom: 4px;
+}
+
+.receipt-summary h2 {
+  margin: 0;
+  font-size: 17px;
+  letter-spacing: -0.025em;
+}
+
+.receipt-summary-id {
+  display: block;
+  margin-top: 4px;
+  color: #71838a;
+  font-size: 11px;
+}
+
+.receipt-summary-action,
 .receipt-actions {
   display: flex;
   align-items: center;
@@ -753,10 +787,32 @@ input {
   gap: 18px;
 }
 
-.receipt-topline h2 {
-  margin: 5px 0 0;
-  font-size: 22px;
-  letter-spacing: -0.035em;
+.receipt-summary-action {
+  flex: 0 0 auto;
+  gap: 12px;
+}
+
+.receipt-chevron {
+  width: 9px;
+  height: 9px;
+  border-right: 2px solid #71838a;
+  border-bottom: 2px solid #71838a;
+  transform: rotate(45deg) translateY(-2px);
+  transition: transform 160ms ease;
+}
+
+.receipt-toggle-label {
+  color: #71838a;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.proof-receipt[open] .receipt-chevron {
+  transform: rotate(225deg) translate(-2px, -1px);
+}
+
+.receipt-expanded {
+  padding-top: 20px;
 }
 
 .receipt-status {
@@ -931,10 +987,16 @@ input {
     grid-template-columns: 1fr;
   }
 
-  .receipt-topline,
+  .receipt-summary,
+  .receipt-summary-action,
   .receipt-actions {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .receipt-summary-action {
+    align-items: center;
+    flex-direction: row;
   }
 
   .queue-stats {
@@ -981,6 +1043,14 @@ input {
     padding: 0;
     border: 0;
     box-shadow: none;
+  }
+
+  .proof-receipt:not([open]) > .receipt-expanded {
+    display: block;
+  }
+
+  .receipt-summary-action {
+    display: none;
   }
 }
 

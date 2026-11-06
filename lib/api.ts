@@ -9,6 +9,8 @@ export interface TransactionPayload {
   reading_type?: 'CUMULATIVE_METER' | 'DAILY_VOLUME';
   operator_id?: string;
   reported_cash?: number;
+  proof_image_url?: string;
+  proofImageUrl?: string;
   evidence_path?: string;
   evidence_pending?: boolean;
   checksum?: string;
@@ -30,6 +32,7 @@ export interface SignedReceipt {
   hash: string;
   signature: string;
   algorithm: 'SHA-256';
+  proofImageUrl?: string;
   evidencePath?: string;
   issuedAt: string;
   signedAt: string;
@@ -112,6 +115,7 @@ export function parseSignedReceipt(value: unknown): SignedReceipt | undefined {
   const checksum = value.checksum;
   const hash = value.hash;
   const signature = value.signature;
+  const proofImageUrl = value.proofImageUrl;
   const evidencePath = value.evidencePath;
   const issuedAt = value.issuedAt;
   const signedAt = value.signedAt;
@@ -158,6 +162,7 @@ export function parseSignedReceipt(value: unknown): SignedReceipt | undefined {
     checksum,
     hash,
     signature,
+    ...(typeof proofImageUrl === 'string' ? { proofImageUrl } : {}),
     ...(typeof evidencePath === 'string' ? { evidencePath } : {}),
     algorithm: 'SHA-256',
     issuedAt,
@@ -183,6 +188,7 @@ export async function submitTransactionLog(
   ack: boolean;
   status?: string;
   logId?: string;
+  proofImageUrl?: string;
   evidencePath?: string;
   receipt?: SignedReceipt;
 }> {
@@ -193,7 +199,8 @@ export async function submitTransactionLog(
 
   const serverUrl = options.serverUrl || '/api/kiosk/logs';
   const retryDelaysMs = options.retryDelaysMs;
-  let evidencePath = payload.evidence_path;
+  let proofImageUrl =
+    payload.proof_image_url ?? payload.proofImageUrl ?? payload.evidence_path;
 
   if (options.evidenceFile) {
     const formData = new FormData();
@@ -222,7 +229,7 @@ export async function submitTransactionLog(
       if (uploadResponse.status === 503) {
         throw new EvidenceStorageUnavailableError(
           detail ||
-            'Evidence storage is not configured on the server. Ask an administrator to configure it; this submission remains queued.'
+            'Evidence storage is unavailable on the server. Check the database configuration; this submission remains queued.'
         );
       }
       if (uploadResponse.status >= 400 && uploadResponse.status < 500) {
@@ -236,10 +243,18 @@ export async function submitTransactionLog(
     }
 
     const uploadResult: unknown = await uploadResponse.json();
-    if (!isRecord(uploadResult) || typeof uploadResult.evidencePath !== 'string') {
-      throw new Error('Evidence upload response did not contain a storage path.');
+    if (!isRecord(uploadResult)) {
+      throw new Error('Evidence upload response was not a valid object.');
     }
-    evidencePath = uploadResult.evidencePath;
+    proofImageUrl =
+      typeof uploadResult.proofImageUrl === 'string'
+        ? uploadResult.proofImageUrl
+        : typeof uploadResult.evidencePath === 'string'
+          ? uploadResult.evidencePath
+          : undefined;
+    if (!proofImageUrl) {
+      throw new Error('Evidence upload response did not contain a proof image URL.');
+    }
   }
 
   // Use existing stored checksum if available; otherwise generate deterministic checksum
@@ -262,7 +277,8 @@ export async function submitTransactionLog(
     meterVolume: payload.meter_volume,
     reportedCash: payload.reported_cash,
     readingType: payload.reading_type,
-    evidencePath,
+    proofImageUrl,
+    evidencePath: proofImageUrl,
     recordedAt: payload.recorded_at,
     checksum,
     // snake_case preserved for client & legacy servers
@@ -272,7 +288,8 @@ export async function submitTransactionLog(
     meter_volume: payload.meter_volume,
     reported_cash: payload.reported_cash,
     reading_type: payload.reading_type,
-    evidence_path: evidencePath,
+    proof_image_url: proofImageUrl,
+    evidence_path: proofImageUrl,
     recorded_at: payload.recorded_at,
     checksum_version: checksumVersion,
   };
@@ -328,38 +345,46 @@ export async function submitTransactionLog(
 
   if (result.ack === true) {
     const parsedReceipt = parseSignedReceipt(result.receipt);
-    const responseEvidencePath =
-      typeof result.evidencePath === 'string'
-        ? result.evidencePath
-        : parsedReceipt?.evidencePath;
+    const responseProofImageUrl =
+      typeof result.proofImageUrl === 'string'
+        ? result.proofImageUrl
+        : typeof result.evidencePath === 'string'
+          ? result.evidencePath
+          : parsedReceipt?.proofImageUrl ?? parsedReceipt?.evidencePath;
     const receipt =
-      parsedReceipt && responseEvidencePath && !parsedReceipt.evidencePath
-        ? { ...parsedReceipt, evidencePath: responseEvidencePath }
+      parsedReceipt && responseProofImageUrl && !parsedReceipt.proofImageUrl
+        ? { ...parsedReceipt, proofImageUrl: responseProofImageUrl }
         : parsedReceipt;
     return {
       ack: true,
       ...(typeof result.status === 'string' ? { status: result.status } : {}),
       ...(typeof result.logId === 'string' ? { logId: result.logId } : {}),
-      ...(responseEvidencePath ? { evidencePath: responseEvidencePath } : {}),
+      ...(responseProofImageUrl
+        ? { proofImageUrl: responseProofImageUrl, evidencePath: responseProofImageUrl }
+        : {}),
       ...(receipt ? { receipt } : {}),
     };
   }
 
   if (result.success === true && result.transactionId === payload.transaction_id) {
     const parsedReceipt = parseSignedReceipt(result.receipt);
-    const responseEvidencePath =
-      typeof result.evidencePath === 'string'
-        ? result.evidencePath
-        : parsedReceipt?.evidencePath;
+    const responseProofImageUrl =
+      typeof result.proofImageUrl === 'string'
+        ? result.proofImageUrl
+        : typeof result.evidencePath === 'string'
+          ? result.evidencePath
+          : parsedReceipt?.proofImageUrl ?? parsedReceipt?.evidencePath;
     const receipt =
-      parsedReceipt && responseEvidencePath && !parsedReceipt.evidencePath
-        ? { ...parsedReceipt, evidencePath: responseEvidencePath }
+      parsedReceipt && responseProofImageUrl && !parsedReceipt.proofImageUrl
+        ? { ...parsedReceipt, proofImageUrl: responseProofImageUrl }
         : parsedReceipt;
     return {
       ack: true,
       status: 'saved',
       ...(typeof result.logId === 'string' ? { logId: result.logId } : {}),
-      ...(responseEvidencePath ? { evidencePath: responseEvidencePath } : {}),
+      ...(responseProofImageUrl
+        ? { proofImageUrl: responseProofImageUrl, evidencePath: responseProofImageUrl }
+        : {}),
       ...(receipt ? { receipt } : {}),
     };
   }

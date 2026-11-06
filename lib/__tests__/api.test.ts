@@ -35,7 +35,7 @@ describe('transaction server acknowledgements', () => {
   it('sends operator totals and returns the signed proof receipt', async () => {
     const submission = {
       ...payload,
-      reading_type: 'DAILY_VOLUME' as const,
+      reading_type: 'CUMULATIVE_METER' as const,
       operator_id: 'OP-104',
       reported_cash: 950,
     };
@@ -73,12 +73,12 @@ describe('transaction server acknowledgements', () => {
     expect(JSON.parse(requestBody)).toMatchObject({
       operatorId: 'OP-104',
       reportedCash: 950,
-      readingType: 'DAILY_VOLUME',
+      readingType: 'CUMULATIVE_METER',
     });
   });
 
   it('uploads reading evidence before posting the log and links it in the receipt', async () => {
-    const evidencePath = `test-transaction/${'a'.repeat(64)}.jpg`;
+    const proofImageUrl = `/api/kiosk/logs/${payload.transaction_id}/evidence/${'a'.repeat(64)}.jpg`;
     const receipt = {
       receiptId: 'RCPT-evidence',
       transactionId: payload.transaction_id,
@@ -91,7 +91,6 @@ describe('transaction server acknowledgements', () => {
       hash: 'a'.repeat(64),
       signature: 'b'.repeat(64),
       algorithm: 'SHA-256',
-      evidencePath,
       issuedAt: '2026-10-19T00:00:01.000Z',
       signedAt: '2026-10-19T00:00:01.000Z',
     };
@@ -99,12 +98,17 @@ describe('transaction server acknowledgements', () => {
     globalThis.fetch = (async (input, init) => {
       calls.push({ url: String(input), init });
       if (calls.length === 1) {
-        return new Response(JSON.stringify({ evidencePath }), {
+        return new Response(JSON.stringify({ proofImageUrl }), {
           status: 201,
           headers: { 'Content-Type': 'application/json' },
         });
       }
-      return new Response(JSON.stringify({ ack: true, logId: 'log-evidence', receipt }), {
+      return new Response(JSON.stringify({
+        ack: true,
+        logId: 'log-evidence',
+        proofImageUrl,
+        receipt,
+      }), {
         status: 201,
         headers: { 'Content-Type': 'application/json' },
       });
@@ -114,7 +118,12 @@ describe('transaction server acknowledgements', () => {
       type: 'image/jpeg',
     });
     const result = await submitTransactionLog(
-      { ...payload, operator_id: 'OP-104', reported_cash: 950 },
+      {
+        ...payload,
+        reading_type: 'CUMULATIVE_METER',
+        operator_id: 'OP-104',
+        reported_cash: 950,
+      },
       {
         serverUrl: 'http://localhost:3001/api/kiosk/logs',
         retryDelaysMs: [],
@@ -130,25 +139,25 @@ describe('transaction server acknowledgements', () => {
     expect(calls[0].init?.body).toBeInstanceOf(FormData);
     expect(calls[1].url).toBe('http://localhost:3001/api/kiosk/logs');
     expect(JSON.parse(String(calls[1].init?.body))).toMatchObject({
-      evidencePath,
-      evidence_path: evidencePath,
+      readingType: 'CUMULATIVE_METER',
+      proofImageUrl,
+      proof_image_url: proofImageUrl,
     });
     expect(result).toMatchObject({
       ack: true,
       logId: 'log-evidence',
-      evidencePath,
-      receipt: { evidencePath },
+      proofImageUrl,
+      receipt: { proofImageUrl },
     });
   });
 
-  it('surfaces evidence-storage configuration failures as a server error, not a dropped connection', async () => {
+  it('surfaces evidence-storage server failures without treating them as a dropped connection', async () => {
     globalThis.fetch = (async () =>
       new Response(
         JSON.stringify({
           statusCode: 503,
           error: 'Service Unavailable',
-          message:
-            'Evidence storage is not configured. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY on the server.',
+          message: 'Evidence database table is not ready. Apply the server Prisma schema.',
         }),
         { status: 503, headers: { 'Content-Type': 'application/json' } }
       )) as typeof fetch;

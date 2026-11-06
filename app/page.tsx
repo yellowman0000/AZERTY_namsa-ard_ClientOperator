@@ -73,7 +73,7 @@ function receiptMatchesSubmission(
     receipt.meterVolume === record.meter_volume &&
     receipt.reportedCash === record.reported_cash &&
     Date.parse(receipt.recordedAt) === Date.parse(record.recorded_at) &&
-    (!requiresEvidence || Boolean(receipt.evidencePath))
+    (!requiresEvidence || Boolean(receipt.proofImageUrl || receipt.evidencePath))
   );
 }
 
@@ -219,7 +219,7 @@ export default function OperatorConsole() {
       const receipt = parseSignedReceipt(ack.receipt);
       if (!receipt ||
         !receiptMatchesSubmission(receipt, record, record.evidence_pending === true)) {
-        if (record.reading_type === 'DAILY_VOLUME') {
+        if (record.operator_id) {
           receiptWarning.current = true;
         }
         return;
@@ -322,7 +322,7 @@ export default function OperatorConsole() {
     const record: TransactionPayload = {
       transaction_id: crypto.randomUUID(),
       kiosk_id: kioskId,
-      reading_type: 'DAILY_VOLUME',
+      reading_type: 'CUMULATIVE_METER',
       operator_id: submittedBy,
       meter_volume: meterVolume,
       reported_cash: reportedCash,

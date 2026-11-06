@@ -334,7 +334,16 @@ export class OfflineBackgroundDispatcher {
   }
 
   public getQueue(): TransactionPayload[] {
-    return this.storage.getQueue();
+    const storedQueue = this.storage.getQueue();
+    const normalizedQueue = storedQueue.map((record) =>
+      record.reading_type === 'DAILY_VOLUME'
+        ? { ...record, reading_type: 'CUMULATIVE_METER' as const }
+        : record
+    );
+    if (normalizedQueue.some((record, index) => record !== storedQueue[index])) {
+      this.storage.saveQueue(normalizedQueue);
+    }
+    return normalizedQueue;
   }
 
   public getQuarantineQueue(): TransactionPayload[] {
@@ -361,26 +370,31 @@ export class OfflineBackgroundDispatcher {
    * Performs idempotency checks against processed list, active queue, and quarantine.
    */
   public async enqueue(record: TransactionPayload): Promise<boolean> {
+    const normalizedRecord =
+      record.reading_type === 'DAILY_VOLUME'
+        ? { ...record, reading_type: 'CUMULATIVE_METER' as const }
+        : record;
+
     // 1. Idempotency checks
-    if (this.isProcessed(record.transaction_id)) {
-      this.log('warn', `[Idempotency] Rejected: ${record.transaction_id} is already processed.`);
+    if (this.isProcessed(normalizedRecord.transaction_id)) {
+      this.log('warn', `[Idempotency] Rejected: ${normalizedRecord.transaction_id} is already processed.`);
       return false;
     }
 
     const queue = this.getQueue();
-    if (queue.some((item) => item.transaction_id === record.transaction_id)) {
-      this.log('warn', `[Idempotency] Rejected: ${record.transaction_id} is already in queue.`);
+    if (queue.some((item) => item.transaction_id === normalizedRecord.transaction_id)) {
+      this.log('warn', `[Idempotency] Rejected: ${normalizedRecord.transaction_id} is already in queue.`);
       return false;
     }
 
     const quarantine = this.getQuarantineQueue();
-    if (quarantine.some((item) => item.transaction_id === record.transaction_id)) {
-      this.log('warn', `[Idempotency] Rejected: ${record.transaction_id} is quarantined.`);
+    if (quarantine.some((item) => item.transaction_id === normalizedRecord.transaction_id)) {
+      this.log('warn', `[Idempotency] Rejected: ${normalizedRecord.transaction_id} is quarantined.`);
       return false;
     }
 
     // 2. Acceptance: Stored alongside cached payload (Story 14-2 Subtask 1)
-    const payloadWithChecksum = await attachChecksumToPayload(record, {
+    const payloadWithChecksum = await attachChecksumToPayload(normalizedRecord, {
       version: CURRENT_CHECKSUM_VERSION,
     });
 
@@ -389,7 +403,7 @@ export class OfflineBackgroundDispatcher {
 
     this.log(
       'info',
-      `Enqueued record ${record.transaction_id} (Queue size: ${queue.length}, Checksum: ${payloadWithChecksum.checksum.slice(0, 8)}...)`
+      `Enqueued record ${normalizedRecord.transaction_id} (Queue size: ${queue.length}, Checksum: ${payloadWithChecksum.checksum.slice(0, 8)}...)`
     );
     this.emit('item_enqueued', { record: payloadWithChecksum, queueLength: queue.length });
 

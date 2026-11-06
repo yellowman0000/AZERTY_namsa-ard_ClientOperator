@@ -109,7 +109,7 @@ describe('Story 14-3 Subtask 2: Automated Sequential Background Dispatcher (Ball
       expect(dispatcher.isProcessed('TXN-FIFO-3')).toBe(true);
     });
 
-    it('includes the server receipt in the success event for an offline daily submission', async () => {
+    it('submits legacy queued readings as cumulative and includes the server receipt', async () => {
       const record: TransactionPayload = {
         ...createRecord('TXN-OFFLINE-RECEIPT', 25.5),
         reading_type: 'DAILY_VOLUME',
@@ -132,12 +132,14 @@ describe('Story 14-3 Subtask 2: Automated Sequential Background Dispatcher (Ball
         signedAt: record.recorded_at,
       };
 
-      globalThis.fetch = mock(async () =>
-        new Response(JSON.stringify({ ack: true, logId: 'log-offline-1', receipt }), {
+      let submittedReadingType = '';
+      globalThis.fetch = mock(async (_url: RequestInfo | URL, init?: RequestInit) => {
+        submittedReadingType = JSON.parse(String(init?.body)).readingType;
+        return new Response(JSON.stringify({ ack: true, logId: 'log-offline-1', receipt }), {
           status: 201,
           headers: { 'Content-Type': 'application/json' },
         })
-      ) as unknown as typeof fetch;
+      }) as unknown as typeof fetch;
 
       const events: DispatcherEvent[] = [];
       dispatcher.subscribe((event) => events.push(event));
@@ -146,9 +148,10 @@ describe('Story 14-3 Subtask 2: Automated Sequential Background Dispatcher (Ball
 
       const successEvent = events.find((event) => event.type === 'item_success');
       expect(summary.processed).toBe(1);
+      expect(submittedReadingType).toBe('CUMULATIVE_METER');
       expect(successEvent?.data.record).toMatchObject({
         transaction_id: record.transaction_id,
-        reading_type: 'DAILY_VOLUME',
+        reading_type: 'CUMULATIVE_METER',
       });
       expect(successEvent?.data.ack).toMatchObject({ receipt });
     });
