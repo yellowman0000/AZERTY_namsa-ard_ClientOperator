@@ -419,9 +419,14 @@ export default function OperatorConsole() {
           <span className="brand-name">namsa-ard</span>
           <span className="brand-subtitle">Operator console</span>
         </Link>
-        <div className={`status-pill status-${status}`} aria-live="polite">
-          <span className="status-dot" />
-          {statusLabel}
+        <div className="topbar-actions">
+          <Link className="nav-link" href="/manager">
+            Historical logs
+          </Link>
+          <div className={`status-pill status-${status}`} aria-live="polite">
+            <span className="status-dot" />
+            {statusLabel}
+          </div>
         </div>
       </header>
 
