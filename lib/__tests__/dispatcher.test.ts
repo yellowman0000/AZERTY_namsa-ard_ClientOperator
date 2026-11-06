@@ -381,4 +381,76 @@ describe('Story 14-3 Subtask 2: Automated Sequential Background Dispatcher (Ball
       unsubscribe();
     });
   });
+
+  describe('Recovery from a stalled sync', () => {
+    const okResponse = () =>
+      new Response(JSON.stringify({ ack: true, status: 'saved' }), {
+        status: 201,
+        headers: { 'Content-Type': 'application/json' },
+      });
+
+    it('retries automatically once the pause cooldown elapses', async () => {
+      const cooldownStorage = new InMemoryQueueStorage();
+      const cooldownDispatcher = new OfflineBackgroundDispatcher({
+        storage: cooldownStorage,
+        pauseCooldownMs: 0,
+        recordRetryDelaysMs: [10],
+        logLevel: 'silent',
+      });
+      globalThis.fetch = mock(async () => okResponse()) as unknown as typeof fetch;
+
+      await cooldownDispatcher.enqueue(createRecord('TXN-COOLDOWN-1'));
+      cooldownDispatcher.pause('Circuit breaker opened');
+
+      const summary = await cooldownDispatcher.processQueue();
+
+      expect(summary.paused).toBe(false);
+      expect(summary.processed).toBe(1);
+      expect(cooldownDispatcher.getStatus()).toBe('idle');
+      expect(cooldownDispatcher.getQueue()).toHaveLength(0);
+    });
+
+    it('keeps waiting while the cooldown has not elapsed', async () => {
+      const cooldownStorage = new InMemoryQueueStorage();
+      const cooldownDispatcher = new OfflineBackgroundDispatcher({
+        storage: cooldownStorage,
+        pauseCooldownMs: 60_000,
+        recordRetryDelaysMs: [10],
+        logLevel: 'silent',
+      });
+      globalThis.fetch = mock(async () => okResponse()) as unknown as typeof fetch;
+
+      await cooldownDispatcher.enqueue(createRecord('TXN-COOLDOWN-2'));
+      cooldownDispatcher.pause('Circuit breaker opened');
+
+      const summary = await cooldownDispatcher.processQueue();
+
+      expect(summary.paused).toBe(true);
+      expect(summary.processed).toBe(0);
+      expect(cooldownDispatcher.getQueue()).toHaveLength(1);
+    });
+
+    it('does not stay stuck in "syncing" when a batch throws', async () => {
+      const stuckStorage = new InMemoryQueueStorage();
+      const stuckDispatcher = new OfflineBackgroundDispatcher({
+        storage: stuckStorage,
+        recordRetryDelaysMs: [10],
+        logLevel: 'silent',
+      });
+      globalThis.fetch = mock(async () => okResponse()) as unknown as typeof fetch;
+
+      await stuckDispatcher.enqueue(createRecord('TXN-STUCK-1'));
+      const queued = stuckDispatcher.getQueue()[0];
+      queued.meter_volume = 999; // tamper → local checksum can no longer match
+      stuckStorage.saveQuarantine = () => {
+        throw new Error('quarantine storage exploded');
+      };
+
+      const summary = await stuckDispatcher.processQueue();
+
+      expect(stuckDispatcher.getStatus()).toBe('idle');
+      expect(summary.processed).toBe(0);
+      expect(summary.failureReason).toContain('quarantine storage exploded');
+    });
+  });
 });

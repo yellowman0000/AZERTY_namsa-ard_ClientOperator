@@ -215,7 +215,9 @@ export async function submitTransactionLog(
       uploadResponse = await fetchWithTimeout(
         evidenceUrl,
         { method: 'POST', body: formData },
-        options.timeoutMs ?? 30000
+        // Above the server's imgBB budget (IMGBB_TIMEOUT_MS, 90s default) so the
+        // server can answer 503 itself instead of the browser aborting first.
+        options.timeoutMs ?? 120000
       );
     } catch (error) {
       const detail = error instanceof Error ? ` ${error.message}` : '';
@@ -229,7 +231,7 @@ export async function submitTransactionLog(
       if (uploadResponse.status === 503) {
         throw new EvidenceStorageUnavailableError(
           detail ||
-            'Evidence storage is unavailable on the server. Check the database configuration; this submission remains queued.'
+            'Evidence storage is unavailable on the server. Check the server image storage configuration; this submission remains queued.'
         );
       }
       if (uploadResponse.status >= 400 && uploadResponse.status < 500) {

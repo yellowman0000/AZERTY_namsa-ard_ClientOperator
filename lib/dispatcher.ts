@@ -48,6 +48,12 @@ export interface DispatcherOptions {
   storage?: IQueueStorage<TransactionPayload>;
   /** Logging verbosity. Default: 'info'. */
   logLevel?: LogLevel;
+  /**
+   * How long the circuit breaker stays open before the next attempt is allowed.
+   * Stops a queued entry being stuck forever after the server or photo storage
+   * recovers. Default: 60000 (1 minute).
+   */
+  pauseCooldownMs?: number;
 }
 
 export interface DispatcherStats {
@@ -191,6 +197,9 @@ export class OfflineBackgroundDispatcher {
   private readonly maxProcessedHistory: number;
   private readonly storage: IQueueStorage<TransactionPayload>;
   private readonly logLevel: LogLevel;
+  private readonly pauseCooldownMs: number;
+  /** When the circuit breaker opened, used to allow automatic retries later. */
+  private pausedAt: number | null = null;
 
   // Telemetry metrics
   private totalDispatched = 0;
@@ -205,6 +214,7 @@ export class OfflineBackgroundDispatcher {
   constructor(options: DispatcherOptions = {}) {
     this.maxConsecutiveFailures = options.maxConsecutiveFailures ?? 3;
     this.recordRetryDelaysMs = options.recordRetryDelaysMs ?? [1000, 2000, 4000];
+    this.pauseCooldownMs = options.pauseCooldownMs ?? 60_000;
     this.maxProcessedHistory = options.maxProcessedHistory ?? 200;
     this.storage = options.storage ?? new LocalStorageQueueStorage();
     this.logLevel = options.logLevel ?? 'info';
@@ -299,6 +309,7 @@ export class OfflineBackgroundDispatcher {
    * Pauses the background dispatcher, preventing further outbound requests.
    */
   public pause(reason = 'Manual pause'): void {
+    this.pausedAt = Date.now();
     this.setStatus('paused', reason);
     this.emit('dispatcher_paused', { reason, consecutiveFailures: this.consecutiveFailures });
   }
@@ -307,6 +318,7 @@ export class OfflineBackgroundDispatcher {
    * Resumes the background dispatcher after being paused, resetting failure counters.
    */
   public resume(reason = 'Manual resume'): void {
+    this.pausedAt = null;
     this.consecutiveFailures = 0;
     this.setStatus('idle', reason);
     this.emit('dispatcher_resumed', { reason });
@@ -424,10 +436,41 @@ export class OfflineBackgroundDispatcher {
     }
 
     if (this.status === 'paused') {
-      this.log('warn', 'processQueue skipped: dispatcher is currently paused.');
-      return { processed: 0, quarantined: 0, failed: 0, duplicates: 0, paused: true };
+      if (!this.pauseCooldownElapsed()) {
+        this.log('warn', 'processQueue skipped: dispatcher is currently paused.');
+        return { processed: 0, quarantined: 0, failed: 0, duplicates: 0, paused: true };
+      }
+      this.resume('Automatic retry after pause cooldown');
     }
 
+    try {
+      return await this.runQueueBatch();
+    } catch (error) {
+      // Never leave the dispatcher stuck in 'syncing': that would silently
+      // block every later sync attempt until the page is reloaded.
+      this.log('error', 'Dispatch batch aborted unexpectedly:', error);
+      if (this.getStatus() === 'syncing') {
+        this.setStatus('idle', 'Dispatch aborted unexpectedly');
+      }
+      return {
+        processed: 0,
+        quarantined: 0,
+        failed: this.storage.getQueue().length,
+        duplicates: 0,
+        paused: this.status === 'paused',
+        failureReason: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
+  /** True once the circuit breaker has been open long enough to try again. */
+  private pauseCooldownElapsed(): boolean {
+    return (
+      this.pausedAt !== null && Date.now() - this.pausedAt >= this.pauseCooldownMs
+    );
+  }
+
+  private async runQueueBatch(): Promise<DispatchSummary> {
     const queue = this.getQueue();
     if (queue.length === 0) {
       return { processed: 0, quarantined: 0, failed: 0, duplicates: 0, paused: false };

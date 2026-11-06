@@ -20,6 +20,13 @@ import {
   saveOfflineEvidence,
 } from '../lib/offlineEvidence';
 import ProofReceipt from './proof-receipt';
+import { prepareEvidencePhoto } from '../lib/evidenceImage';
+import {
+  isAcceptableEvidence,
+  receiptMatchesSubmission,
+  validateDailySubmission,
+  SUBMISSION_MESSAGES,
+} from '../lib/submission';
 import {
   PROCESSED_KEY,
   QUEUE_KEY,
@@ -29,8 +36,6 @@ import {
 
 const kioskId = process.env.NEXT_PUBLIC_KIOSK_ID || 'KIOSK-001';
 const configuredOperatorId = process.env.NEXT_PUBLIC_OPERATOR_ID || '';
-const maxEvidenceSize = 5 * 1024 * 1024;
-const allowedEvidenceTypes = ['image/jpeg', 'image/png', 'image/webp'];
 
 type Notice = { kind: 'success' | 'warning' | 'error'; text: string };
 
@@ -60,22 +65,6 @@ function subscribeToNetwork(onStoreChange: () => void) {
 const getNetworkStatus = () => typeof navigator === 'undefined' || navigator.onLine;
 const getPendingSnapshot = () => JSON.stringify(syncDispatcher.getQueue());
 const getQuarantineSnapshot = () => syncDispatcher.getQuarantineQueue().length;
-
-function receiptMatchesSubmission(
-  receipt: SignedReceipt,
-  record: TransactionPayload,
-  requiresEvidence = false
-) {
-  return (
-    receipt.transactionId === record.transaction_id &&
-    receipt.kioskId === record.kiosk_id &&
-    receipt.operatorId === record.operator_id &&
-    receipt.meterVolume === record.meter_volume &&
-    receipt.reportedCash === record.reported_cash &&
-    Date.parse(receipt.recordedAt) === Date.parse(record.recorded_at) &&
-    (!requiresEvidence || Boolean(receipt.proofImageUrl || receipt.evidencePath))
-  );
-}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -198,7 +187,14 @@ export default function OperatorConsole() {
     return listenForReconnection({
       kioskId,
       serverUrl: '/api/kiosk/heartbeat',
-      onReconnect: flushPending,
+      onReconnect: () => {
+        // Reconnection is the right moment to retry: the circuit breaker may
+        // still be open from failures that happened while offline.
+        if (syncDispatcher.getStatus() === 'paused') {
+          syncDispatcher.resume('Network reconnected');
+        }
+        void flushPending();
+      },
     });
   }, [flushPending]);
 
@@ -289,50 +285,30 @@ export default function OperatorConsole() {
     event.preventDefault();
     if (submitting) return;
 
-    if (
-      evidencePhoto &&
-      (!allowedEvidenceTypes.includes(evidencePhoto.type) ||
-        evidencePhoto.size > maxEvidenceSize)
-    ) {
-      setNotice({
-        kind: 'error',
-        text: 'Choose a JPEG, PNG, or WebP photo that is 5 MB or smaller.',
-      });
+    const validation = validateDailySubmission({
+      volume,
+      cash,
+      operatorId,
+      evidencePhoto,
+      kioskId,
+      transactionId: crypto.randomUUID(),
+      recordedAt: new Date().toISOString(),
+    });
+    if (!validation.ok) {
+      setNotice({ kind: 'error', text: validation.error });
       return;
     }
 
-    const meterVolume = Number(volume);
-    if (!Number.isFinite(meterVolume) || meterVolume <= 0) {
-      setNotice({ kind: 'error', text: 'Enter a water volume greater than zero.' });
-      return;
-    }
+    const record = validation.record;
+    // Shrink large camera photos before they are queued or uploaded; a
+    // multi-megabyte upload is slow enough to time out mid-sync.
+    const photo = evidencePhoto ? await prepareEvidencePhoto(evidencePhoto) : null;
 
-    const submittedBy = operatorId.trim();
-    if (!submittedBy) {
-      setNotice({ kind: 'error', text: 'Enter the Field Operator ID.' });
-      return;
-    }
-
-    const reportedCash = Number(cash);
-    if (cash.trim() === '' || !Number.isFinite(reportedCash) || reportedCash < 0) {
-      setNotice({ kind: 'error', text: 'Enter cash collected as zero or a positive amount.' });
-      return;
-    }
-
-    const record: TransactionPayload = {
-      transaction_id: crypto.randomUUID(),
-      kiosk_id: kioskId,
-      reading_type: 'CUMULATIVE_METER',
-      operator_id: submittedBy,
-      meter_volume: meterVolume,
-      reported_cash: reportedCash,
-      recorded_at: new Date().toISOString(),
-    };
     if (!navigator.onLine || !isOnline || connection === 'dropped') {
       if (await queueEntry(
         record,
         'Offline entry saved on this device and will sync when the server returns.',
-        evidencePhoto
+        photo
       )) {
         setVolume('');
         setCash('');
@@ -346,7 +322,7 @@ export default function OperatorConsole() {
     setSubmitting(true);
     try {
       const result = await submitTransactionLog(record, {
-        ...(evidencePhoto ? { evidenceFile: evidencePhoto, evidenceFileName: evidencePhoto.name } : {}),
+        ...(photo ? { evidenceFile: photo, evidenceFileName: photo.name } : {}),
       });
       syncDispatcher.markProcessed(record.transaction_id);
       setVolume('');
@@ -357,7 +333,7 @@ export default function OperatorConsole() {
       const responseReceipt = result.receipt;
       if (
         responseReceipt &&
-        receiptMatchesSubmission(responseReceipt, record, Boolean(evidencePhoto))
+        receiptMatchesSubmission(responseReceipt, record, Boolean(photo))
       ) {
         setReceipts((current) =>
           current.some((existing) => existing.receiptId === responseReceipt.receiptId)
@@ -383,7 +359,7 @@ export default function OperatorConsole() {
           : error instanceof ConnectionDroppedError
             ? 'Connection was lost. Entry saved on this device for later sync.'
             : 'Server unavailable. Entry saved on this device for later sync.';
-        if (await queueEntry(record, message, evidencePhoto)) {
+        if (await queueEntry(record, message, photo)) {
           setVolume('');
           setCash('');
           setEvidencePhoto(null);
@@ -520,17 +496,13 @@ export default function OperatorConsole() {
                   capture="environment"
                   onChange={(event) => {
                     const file = event.currentTarget.files?.[0] ?? null;
-                    if (
-                      file &&
-                      (!allowedEvidenceTypes.includes(file.type) ||
-                        file.size > maxEvidenceSize)
-                    ) {
+                    if (file && !isAcceptableEvidence(file)) {
                       event.currentTarget.value = '';
                       setEvidencePhoto(null);
                       setEvidencePreview(null);
                       setNotice({
                         kind: 'error',
-                        text: 'Choose a JPEG, PNG, or WebP photo that is 5 MB or smaller.',
+                        text: SUBMISSION_MESSAGES.evidence,
                       });
                       return;
                     }

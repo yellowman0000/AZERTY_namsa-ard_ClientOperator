@@ -31,7 +31,7 @@ npm install
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000). The operator posts heartbeats to `/api/kiosk/heartbeat`, evidence photos to `/api/kiosk/logs/:transactionId/evidence`, and transaction logs to `/api/kiosk/logs`. The evidence upload returns a stable `proofImageUrl`, which is submitted with the daily log and can be opened from the receipt. The server stores photo bytes in PostgreSQL, so ensure its database schema has been updated with `bunx prisma db push`.
+Open [http://localhost:3000](http://localhost:3000). The operator posts heartbeats to `/api/kiosk/heartbeat`, evidence photos to `/api/kiosk/logs/:transactionId/evidence`, and transaction logs to `/api/kiosk/logs`. The evidence upload returns a public `proofImageUrl` (hosted on imgBB by the server), which is submitted with the daily log and can be opened from the receipt.
 
 ## Offline check
 
