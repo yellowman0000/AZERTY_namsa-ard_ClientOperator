@@ -10,6 +10,16 @@ The operator app captures daily water-meter volumes and reported cash, and keeps
 - **05 — Daily cash and liter submission:** Field Operators submit their operator ID, meter volume, and reported cash. On a matching server acknowledgement, whether submitted online or synced later from the offline queue, the app displays the signed SHA-256 proof receipt, which can be printed or saved as PDF from the browser.
 - **Reading evidence:** an optional JPEG, PNG, or WebP photo (up to 5 MB) can be attached to a submission. Online photos upload before the log; offline photos are stored as blobs in IndexedDB and uploaded before the queued log on reconnect. Local photo blobs are removed after the server acknowledges the entry.
 
+## Historical logs (Operation Managers)
+
+`/manager` (linked as **Historical logs** in the top bar) lists submitted daily logs, newest first (`GET /api/kiosk/logs`, 20 per page with **Load older logs**). **Inspect** opens a read-only modal that fetches `GET /api/kiosk/logs/:id/inspect`. The server recomputes the record's SHA-256 checksum on every open and on **Verify again**, and the modal shows:
+
+- **Verified (Tamper-Evident)** (green): the stored record still matches the checksum saved at submission.
+- **Checksum Mismatch** (red): the record changed after submission. The stored and recomputed hashes are shown side by side.
+- **No checksum on record** (amber): the log was submitted without a checksum, so it can't be verified.
+
+The modal has no edit controls, and both endpoints are GET-only. This view needs the server; it is not available offline.
+
 Checksum format and dispatcher behavior are documented in [docs/CHECKSUM_AND_DISPATCHER.md](./docs/CHECKSUM_AND_DISPATCHER.md).
 
 ## Run locally
