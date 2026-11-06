@@ -3,6 +3,7 @@ import {
   OfflineBackgroundDispatcher,
   IQueueStorage,
   DispatcherEvent,
+  normalizeOperatorId,
 } from '../dispatcher';
 import { TransactionPayload } from '../api';
 import { attachChecksumToPayload } from '../checksum';
@@ -379,6 +380,50 @@ describe('Story 14-3 Subtask 2: Automated Sequential Background Dispatcher (Ball
       expect(eventTypes).toContain('batch_complete');
 
       unsubscribe();
+    });
+  });
+
+  describe('Operator ID normalization for queued records', () => {
+    it('rewrites legacy ids into the canonical OP-001 shape', () => {
+      expect(normalizeOperatorId('02')).toBe('OP-002');
+      expect(normalizeOperatorId('2')).toBe('OP-002');
+      expect(normalizeOperatorId('op-1')).toBe('OP-001');
+      expect(normalizeOperatorId('OP-42')).toBe('OP-042');
+      expect(normalizeOperatorId('OP-007')).toBe('OP-007');
+      expect(normalizeOperatorId(undefined)).toBeUndefined();
+    });
+
+    it('normalizes a record queued by an older build before it is sent', async () => {
+      const legacyStorage = new InMemoryQueueStorage();
+      const legacyDispatcher = new OfflineBackgroundDispatcher({
+        storage: legacyStorage,
+        recordRetryDelaysMs: [10],
+        logLevel: 'silent',
+      });
+      let sentBody: Record<string, unknown> = {};
+      globalThis.fetch = mock(async (_url: RequestInfo | URL, init?: RequestInit) => {
+        sentBody = JSON.parse(String(init?.body));
+        return new Response(JSON.stringify({ ack: true, status: 'saved' }), {
+          status: 201,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }) as unknown as typeof fetch;
+
+      // A queue written before the operator-ID format was enforced.
+      legacyStorage.saveQueue([
+        {
+          transaction_id: 'TXN-LEGACY-OP-1',
+          kiosk_id: 'KIOSK-001',
+          meter_volume: 10,
+          operator_id: '02',
+          recorded_at: new Date().toISOString(),
+        },
+      ]);
+
+      const summary = await legacyDispatcher.processQueue();
+
+      expect(summary.processed).toBe(1);
+      expect(sentBody.operator_id).toBe('OP-002');
     });
   });
 

@@ -10,9 +10,12 @@ export const ALLOWED_EVIDENCE_TYPES = [
 export const SUBMISSION_MESSAGES = {
   evidence: 'Choose a JPEG, PNG, or WebP photo that is 5 MB or smaller.',
   volume: 'Enter a water volume greater than zero.',
-  operatorId: 'Enter the Field Operator ID.',
+  operatorId: 'Enter the Operator ID as OP-001 (three digits).',
   cash: 'Enter cash collected as zero or a positive amount.',
 } as const;
+
+/** Canonical operator identifier, e.g. OP-001 — mirrors the server DTO. */
+export const OPERATOR_ID_PATTERN = /^OP-\d{3}$/;
 
 /** Only the file metadata matters for validation, so tests can pass a plain object. */
 export interface EvidenceCandidate {
@@ -61,8 +64,8 @@ export function validateDailySubmission(
     return { ok: false, error: SUBMISSION_MESSAGES.volume };
   }
 
-  const operatorId = input.operatorId.trim();
-  if (!operatorId) {
+  const operatorId = input.operatorId.trim().toUpperCase();
+  if (!OPERATOR_ID_PATTERN.test(operatorId)) {
     return { ok: false, error: SUBMISSION_MESSAGES.operatorId };
   }
 

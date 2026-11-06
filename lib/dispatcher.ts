@@ -186,6 +186,27 @@ export class LocalStorageQueueStorage implements IQueueStorage<TransactionPayloa
 }
 
 /**
+ * Older builds stored operator IDs as bare numbers ("02") or short prefixes
+ * ("op-1"). Rewrite them to the canonical OP-001 shape so records queued before
+ * the format was enforced still pass the server-side pattern.
+ *
+ * Safe for integrity: the offline payload checksum (v1) covers kiosk, volume,
+ * timestamp and transaction ID — not the operator ID.
+ */
+export function normalizeOperatorId(
+  value: string | undefined
+): string | undefined {
+  if (typeof value !== 'string') return value;
+  const trimmed = value.trim().toUpperCase();
+  if (!trimmed) return trimmed;
+  const digits = trimmed.replace(/^OP-?/, '');
+  if (/^\d{1,3}$/.test(digits)) {
+    return `OP-${digits.padStart(3, '0')}`;
+  }
+  return trimmed;
+}
+
+/**
  * Sequential Background Dispatcher that pushes pending records in FIFO order,
  * executes backoff retry, isolates corrupt payloads, and pauses on repeated failures.
  */
@@ -347,11 +368,26 @@ export class OfflineBackgroundDispatcher {
 
   public getQueue(): TransactionPayload[] {
     const storedQueue = this.storage.getQueue();
-    const normalizedQueue = storedQueue.map((record) =>
-      record.reading_type === 'DAILY_VOLUME'
-        ? { ...record, reading_type: 'CUMULATIVE_METER' as const }
-        : record
-    );
+    const normalizedQueue = storedQueue.map((record) => {
+      const readingType =
+        record.reading_type === 'DAILY_VOLUME'
+          ? ('CUMULATIVE_METER' as const)
+          : record.reading_type;
+      const operatorId = normalizeOperatorId(record.operator_id);
+      if (
+        readingType === record.reading_type &&
+        operatorId === record.operator_id
+      ) {
+        return record;
+      }
+      return {
+        ...record,
+        ...(readingType !== record.reading_type
+          ? { reading_type: readingType }
+          : {}),
+        ...(operatorId !== record.operator_id ? { operator_id: operatorId } : {}),
+      };
+    });
     if (normalizedQueue.some((record, index) => record !== storedQueue[index])) {
       this.storage.saveQueue(normalizedQueue);
     }
@@ -382,10 +418,15 @@ export class OfflineBackgroundDispatcher {
    * Performs idempotency checks against processed list, active queue, and quarantine.
    */
   public async enqueue(record: TransactionPayload): Promise<boolean> {
-    const normalizedRecord =
+    const withCanonicalReadingType =
       record.reading_type === 'DAILY_VOLUME'
         ? { ...record, reading_type: 'CUMULATIVE_METER' as const }
         : record;
+    const operatorId = normalizeOperatorId(withCanonicalReadingType.operator_id);
+    const normalizedRecord =
+      operatorId === withCanonicalReadingType.operator_id
+        ? withCanonicalReadingType
+        : { ...withCanonicalReadingType, operator_id: operatorId };
 
     // 1. Idempotency checks
     if (this.isProcessed(normalizedRecord.transaction_id)) {

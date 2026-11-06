@@ -460,9 +460,16 @@ export default function OperatorConsole() {
                     id="operator-id"
                     type="text"
                     autoComplete="off"
-                    maxLength={64}
+                    placeholder="OP-001"
+                    pattern="OP-[0-9]{3}"
+                    title="Operator ID format: OP-001"
+                    autoCapitalize="characters"
+                    spellCheck={false}
+                    maxLength={8}
                     value={operatorId}
-                    onChange={(event) => setOperatorId(event.target.value)}
+                    onChange={(event) =>
+                      setOperatorId(event.target.value.toUpperCase())
+                    }
                     required
                   />
                 </label>

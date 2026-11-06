@@ -85,10 +85,12 @@ describe('Daily cash & liter submission form', () => {
     expect(html).toContain('Liters (L)');
   });
 
-  it('requires the Field Operator ID that will be recorded on the receipt', () => {
+  it('requires an Operator ID in the canonical OP-001 shape', () => {
     const operatorId = tagWithId(html, 'operator-id');
     expect(operatorId).toContain('type="text"');
-    expect(operatorId).toContain('maxLength="64"');
+    expect(operatorId).toContain('pattern="OP-[0-9]{3}"');
+    expect(operatorId).toContain('placeholder="OP-001"');
+    expect(operatorId).toContain('maxLength="8"');
     expect(operatorId).toContain('required');
     expect(html).toContain('Operator ID');
   });
@@ -136,17 +138,27 @@ describe('validateDailySubmission', () => {
     expect(typeof result.record.meter_volume).toBe('number');
   });
 
-  it('requires a Field Operator ID and trims it before submitting', () => {
+  it('accepts the canonical operator ID and normalizes case and spacing', () => {
     expect(validateDailySubmission({ ...baseInput, operatorId: '   ' })).toEqual({
       ok: false,
       error: SUBMISSION_MESSAGES.operatorId,
     });
 
-    const result = validateDailySubmission({ ...baseInput, operatorId: '  OP-9  ' });
+    const result = validateDailySubmission({ ...baseInput, operatorId: '  op-009  ' });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.record.operator_id).toBe('OP-9');
+    expect(result.record.operator_id).toBe('OP-009');
   });
+
+  it.each(['OP-42', '42', 'OP-0042', 'OPERATOR-1', 'OP-01'])(
+    'rejects the malformed operator ID %p',
+    (operatorId) => {
+      expect(validateDailySubmission({ ...baseInput, operatorId })).toEqual({
+        ok: false,
+        error: SUBMISSION_MESSAGES.operatorId,
+      });
+    }
+  );
 
   it('requires cash, allows zero, and rejects negative or non-numeric amounts', () => {
     for (const cash of ['', '   ', '-1', 'abc']) {
