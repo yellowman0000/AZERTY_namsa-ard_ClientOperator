@@ -45,7 +45,8 @@ export interface LogInspection {
 
 export const LOG_PAGE_SIZE = 20;
 
-async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> {
+/** Small JSON GET helper shared by the read-only manager views. */
+export async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> {
   let res: Response;
   try {
     res = await fetchWithTimeout(url, { headers: { Accept: 'application/json' }, signal });

@@ -22,6 +22,20 @@ The modal has no edit controls, and both endpoints are GET-only. This view needs
 
 Checksum format and dispatcher behavior are documented in [docs/CHECKSUM_AND_DISPATCHER.md](./docs/CHECKSUM_AND_DISPATCHER.md).
 
+## Operations review (Operation Managers)
+
+`/manager/operations-review` (linked as **Operations review** in the manager views) is the triage table for the reconciliation engine. It reads `GET /api/kiosk/reconciliation`, which returns each daily log with its interpreted metrics: `expectedRevenue` (meter volume × unit price), `variance` (`reportedCash − expectedRevenue`), and `isAnomaly` (the server's anomaly classification flag for the record).
+
+- Rows the server flagged as anomalous are highlighted amber.
+- Rows with a **Revenue shortfall** (`variance < 0`) are highlighted red, because cash below the expected revenue is the most urgent case.
+- A row that trips both carries both badges; a row with neither shows **Clear**.
+- Summary cards show records reviewed, flagged anomalies, revenue variance alerts, and net variance. **Only flagged records** narrows the table for triage, and **Refresh** re-reads the server.
+- The endpoint is unpaginated, so the table renders the newest 200 matching records and says so when there are more.
+
+The view is read-only and needs the server; it is not available offline.
+
+The anomaly rule behind `isAnomaly` is computed on the server (Sprint 2 story 04, backend task). This view deliberately does not restate the rule in its copy, so the table stays accurate when the backend rule changes.
+
 ## Run locally
 
 Set `API_BASE_URL` to the server origin (defaults to `http://localhost:3001`). Next.js proxies `/api/*` requests to the server, so the browser does not need direct cross-origin access. Optionally set `NEXT_PUBLIC_KIOSK_ID` (defaults to `KIOSK-001`) and `NEXT_PUBLIC_OPERATOR_ID` (prefills the operator ID field; operators can still edit it).

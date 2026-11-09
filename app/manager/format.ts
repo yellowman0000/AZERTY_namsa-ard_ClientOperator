@@ -14,3 +14,16 @@ export function formatAmount(value: number) {
     maximumFractionDigits: 2,
   });
 }
+
+/** Same as formatAmount, with an explicit sign so a shortfall reads as one. */
+export function formatSignedAmount(value: number) {
+  const amount = formatAmount(Math.abs(value));
+  if (value < 0) return `-${amount}`;
+  if (value > 0) return `+${amount}`;
+  return amount;
+}
+
+/** A ratio (0.0123) as a percentage ("1.2%"). */
+export function formatPercent(ratio: number, digits = 1) {
+  return `${(ratio * 100).toFixed(digits)}%`;
+}

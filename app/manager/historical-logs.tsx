@@ -59,9 +59,14 @@ export default function HistoricalLogs() {
           <span className="brand-name">namsa-ard</span>
           <span className="brand-subtitle">Operator console</span>
         </Link>
-        <Link className="nav-link" href="/">
-          Daily submission
-        </Link>
+        <nav className="topbar-actions" aria-label="Manager views">
+          <Link className="nav-link" href="/">
+            Daily submission
+          </Link>
+          <Link className="nav-link" href="/manager/operations-review">
+            Operations review
+          </Link>
+        </nav>
       </header>
 
       <section className="operator-dashboard">
