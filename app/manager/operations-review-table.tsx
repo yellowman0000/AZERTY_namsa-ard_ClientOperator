@@ -12,6 +12,8 @@ import {
   type PresetKey,
 } from '../../lib/dateRange';
 import { DateRangeFilter } from './date-range-filter';
+import { ReportMenu } from './report-menu';
+import { downloadReport, type ReportFormat } from '../../lib/reports';
 import {
   fetchReconciliation,
   getReviewFlags,
@@ -255,6 +257,9 @@ export default function OperationsReview() {
   const [preset, setPreset] = useState<PresetKey>('all');
   const [range, setRange] = useState<DateRange>(EMPTY_RANGE);
   const [appliedRange, setAppliedRange] = useState<DateRange>(EMPTY_RANGE);
+  const [reportOpen, setReportOpen] = useState(false);
+  const [exporting, setExporting] = useState<ReportFormat | null>(null);
+  const [reportError, setReportError] = useState<string | null>(null);
 
   // Inline error for the custom pickers; a non-null value also blocks Apply.
   const rangeError = useMemo(() => validateDateRange(range), [range]);
@@ -303,6 +308,24 @@ export default function OperationsReview() {
     setLoading(true);
     setAppliedRange(range);
   }, [range]);
+
+  const exportReport = useCallback(
+    async (format: ReportFormat) => {
+      setReportOpen(false);
+      setReportError(null);
+      setExporting(format);
+      try {
+        await downloadReport(format, appliedRange);
+      } catch (err: unknown) {
+        setReportError(
+          err instanceof Error ? err.message : 'Could not download the report.'
+        );
+      } finally {
+        setExporting(null);
+      }
+    },
+    [appliedRange]
+  );
 
   const visibleRecords = useMemo(
     () => (flaggedOnly ? records.filter((record) => getReviewFlags(record).length > 0) : records),
@@ -380,15 +403,31 @@ export default function OperationsReview() {
               />
               Only flagged records
             </label>
-            <button
-              className="button button-secondary"
-              type="button"
-              onClick={refresh}
-              disabled={loading}
-            >
-              {refreshing ? 'Refreshing…' : 'Refresh'}
-            </button>
+            <div className="review-actions">
+              <button
+                className="button button-secondary"
+                type="button"
+                onClick={refresh}
+                disabled={loading}
+              >
+                {refreshing ? 'Refreshing…' : 'Refresh'}
+              </button>
+              <ReportMenu
+                open={reportOpen}
+                disabled={rangeError !== null || loading}
+                disabledReason={rangeError ?? 'Loading records…'}
+                exporting={exporting}
+                onToggle={() => setReportOpen((open) => !open)}
+                onExport={exportReport}
+              />
+            </div>
           </div>
+
+          {reportError && (
+            <p className="review-range-error" role="alert">
+              Could not generate the report. {reportError}
+            </p>
+          )}
 
           <ul className="review-legend" aria-label="Row highlight legend">
             <li>
