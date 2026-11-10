@@ -1391,6 +1391,98 @@ input {
   padding-bottom: 12px;
 }
 
+.review-date-filter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px 16px;
+  padding: 12px 0;
+  border-top: 1px solid rgba(11, 37, 48, 0.08);
+  border-bottom: 1px solid rgba(11, 37, 48, 0.08);
+  margin-bottom: 12px;
+}
+
+.review-preset-group {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.review-preset {
+  border: 1px solid rgba(11, 37, 48, 0.16);
+  background: #fff;
+  color: var(--deep);
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.review-preset:hover:not(:disabled) {
+  border-color: var(--spring);
+  color: var(--spring);
+}
+
+.review-preset-active {
+  border-color: var(--spring);
+  background: var(--spring);
+  color: #fff;
+}
+
+.review-preset:disabled,
+.review-apply:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.review-date-fields {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.review-date-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #304a54;
+}
+
+.review-date-field input {
+  border: 1px solid rgba(11, 37, 48, 0.16);
+  border-radius: 8px;
+  padding: 6px 8px;
+  font: inherit;
+  font-weight: 500;
+  color: var(--deep);
+  background: #fff;
+}
+
+.review-date-field input[aria-invalid='true'] {
+  border-color: #c0392b;
+}
+
+.review-apply {
+  padding: 7px 14px;
+}
+
+.review-date-hint {
+  color: #5c7480;
+  font-size: 12px;
+}
+
+.review-range-error {
+  flex-basis: 100%;
+  margin: 0;
+  color: #c0392b;
+  font-size: 12px;
+  font-weight: 600;
+}
+
 .review-filter {
   display: inline-flex;
   align-items: center;

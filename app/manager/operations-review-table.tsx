@@ -3,6 +3,16 @@
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  EMPTY_RANGE,
+  describeRange,
+  presetRange,
+  rangeToQuery,
+  validateDateRange,
+  type DateRange,
+  type PresetKey,
+} from '../../lib/dateRange';
+import { DateRangeFilter } from './date-range-filter';
+import {
   fetchReconciliation,
   getReviewFlags,
   getReviewTone,
@@ -242,12 +252,16 @@ export default function OperationsReview() {
   const [error, setError] = useState<string | null>(null);
   const [flaggedOnly, setFlaggedOnly] = useState(false);
   const [attempt, setAttempt] = useState(0);
+  const [preset, setPreset] = useState<PresetKey>('all');
+  const [range, setRange] = useState<DateRange>(EMPTY_RANGE);
+  const [appliedRange, setAppliedRange] = useState<DateRange>(EMPTY_RANGE);
 
-  // Starts in the loading state; "Refresh" and "Try again" reset it before
-  // bumping `attempt`, so the effect itself never sets state synchronously.
+  // Inline error for the custom pickers; a non-null value also blocks Apply.
+  const rangeError = useMemo(() => validateDateRange(range), [range]);
+
   useEffect(() => {
     const controller = new AbortController();
-    fetchReconciliation({}, controller.signal)
+    fetchReconciliation(rangeToQuery(appliedRange), controller.signal)
       .then((page) => {
         setRecords(page.records);
         setError(null);
@@ -263,13 +277,32 @@ export default function OperationsReview() {
         if (!controller.signal.aborted) setLoading(false);
       });
     return () => controller.abort();
-  }, [attempt]);
+  }, [attempt, appliedRange]);
 
   const refresh = useCallback(() => {
     setLoading(true);
     setError(null);
     setAttempt((n) => n + 1);
   }, []);
+
+  const applyPreset = useCallback((key: Exclude<PresetKey, 'custom'>) => {
+    const next = presetRange(key);
+    setLoading(true);
+    setPreset(key);
+    setRange(next);
+    setAppliedRange(next);
+  }, []);
+
+  const changeRange = useCallback((field: keyof DateRange, value: string) => {
+    setPreset('custom');
+    setRange((current) => ({ ...current, [field]: value }));
+  }, []);
+
+  const applyRange = useCallback(() => {
+    if (validateDateRange(range) !== null) return;
+    setLoading(true);
+    setAppliedRange(range);
+  }, [range]);
 
   const visibleRecords = useMemo(
     () => (flaggedOnly ? records.filter((record) => getReviewFlags(record).length > 0) : records),
@@ -323,9 +356,19 @@ export default function OperationsReview() {
             <h2 id="review-title">Reconciliation records</h2>
             <span className="logs-count">
               {visibleRecords.length} of {records.length}{' '}
-              {records.length === 1 ? 'record' : 'records'} shown
+              {records.length === 1 ? 'record' : 'records'} shown · {describeRange(appliedRange)}
             </span>
           </div>
+
+          <DateRangeFilter
+            preset={preset}
+            range={range}
+            error={rangeError}
+            disabled={loading}
+            onPreset={applyPreset}
+            onRangeChange={changeRange}
+            onApply={applyRange}
+          />
 
           <div className="review-controls">
             <label className="review-filter">
