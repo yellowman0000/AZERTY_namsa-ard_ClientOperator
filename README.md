@@ -24,7 +24,7 @@ Checksum format and dispatcher behavior are documented in [docs/CHECKSUM_AND_DIS
 
 ## Operations review (Operation Managers)
 
-`/manager/operations-review` (linked as **Operations review** in the manager views) is the triage table for the reconciliation engine. It reads `GET /api/kiosk/reconciliation`, which returns each daily log with its interpreted metrics: `expectedRevenue` (meter volume × unit price), `variance` (`reportedCash − expectedRevenue`), and `isAnomaly` (the server's anomaly classification flag for the record).
+`/manager/operations-review` (linked as **Operations review** in the manager views) is the metric dashboard and triage table for the reconciliation engine. It reads `GET /api/kiosk/reconciliation`, which returns each daily log with its interpreted metrics: `expectedRevenue` (meter volume × unit price), `variance` (`reportedCash − expectedRevenue`), and `isAnomaly` (the server's anomaly classification flag for the record).
 
 - Rows the server flagged as anomalous are highlighted amber.
 - Rows with a **Revenue shortfall** (`variance < 0`) are highlighted red, because cash below the expected revenue is the most urgent case.
@@ -32,9 +32,29 @@ Checksum format and dispatcher behavior are documented in [docs/CHECKSUM_AND_DIS
 - Summary cards show records reviewed, flagged anomalies, revenue variance alerts, and net variance. **Only flagged records** narrows the table for triage, and **Refresh** re-reads the server.
 - The endpoint is unpaginated, so the table renders the newest 200 matching records and says so when there are more.
 
+### Date filter binding (Story 06)
+
+The date filter above the dashboard bounds **every** table and graph on the page: the summary cards, the daily metrics table, both charts and the records table all reload from the same filtered request.
+
+- Presets **All time**, **Today**, **Last 7 Days** and **This Month** apply immediately (the presets use the manager's local calendar days).
+- **Start Date** / **End Date** edit a draft range; **Apply** is enabled only for a valid range. A missing bound, a malformed date or a start date after the end date shows an inline error, and an invalid range is never sent to the server.
+- `useDashboardData` (`lib/useDashboardData.ts`) owns the filter state and the request: selecting a valid interval changes `appliedRange`, which refetches `GET /api/kiosk/reconciliation?startDate=…&endDate=…`. Stale requests are aborted when the range changes quickly, and the last valid data stays on screen while the next range loads.
+- The **Metrics over time** section aggregates the filtered records into local calendar days: a daily totals table, a daily meter-volume bar chart and an expected-vs-reported revenue chart. Both charts are dependency-free inline SVG with an accessible title/description (the daily table is the text alternative). Empty ranges render an empty state instead of empty charts.
+
 The view is read-only and needs the server; it is not available offline.
 
 The anomaly rule behind `isAnomaly` is computed on the server (Sprint 2 story 04, backend task). This view deliberately does not restate the rule in its copy, so the table stays accurate when the backend rule changes.
+
+## Stakeholder analytics (Operation Managers / Stakeholders)
+
+`/manager/stakeholder-analytics` (linked as **Stakeholder analytics** in the manager views) is the monthly stakeholder view for Sprint 2 story 09:
+
+- A **month picker** (defaults to the current local month) reloads the monthly aggregation.
+- Three **KPI summary cards**: total gross revenue, outstanding uncollected cash (highlighted when non-zero) and water loss percentage.
+- Two tabs: **Overview** compares gross revenue against uncollected cash; **Social Assistance** renders the required side-by-side column chart comparing subsidized and commercial dispensed volume, including each tier's share of the total.
+- The charts are dependency-free inline SVG with accessible titles/descriptions, and a zero-value month shows an empty state.
+
+The view reads `GET /api/kiosk/analytics/stakeholder?month=YYYY-MM` from the Sprint 2 data contract (story 09 backend task, owned by the backend side of the team). `lib/stakeholderAnalytics.ts` validates the payload before rendering, so a malformed or as-yet-undeployed endpoint shows an inline error with **Try again** instead of empty or `NaN` cards. The view is read-only and needs the server.
 
 ## Run locally
 

@@ -1649,6 +1649,230 @@ input {
   margin: 0 0 12px;
 }
 
+/* ---------- Dashboard metrics (Story 06) ---------- */
+
+.dashboard-metrics {
+  padding: 24px 30px;
+}
+
+.dashboard-subtitle {
+  margin: 4px 0 0;
+  color: #71838a;
+  font-size: 12px;
+}
+
+.dashboard-charts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 14px;
+  margin: 14px 0 18px;
+}
+
+.chart-card {
+  margin: 0;
+  padding: 16px 18px;
+  border: 1px solid rgba(11, 37, 48, 0.07);
+  border-radius: 20px;
+  background: #fff;
+  box-shadow: 0 12px 35px rgba(11, 37, 48, 0.03);
+}
+
+.chart-card figcaption {
+  display: grid;
+  gap: 2px;
+  margin-bottom: 6px;
+}
+
+.chart-card figcaption strong {
+  font-size: 14px;
+}
+
+.chart-card figcaption span {
+  color: #71838a;
+  font-size: 11px;
+}
+
+.chart-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.chart-grid {
+  stroke: rgba(11, 37, 48, 0.08);
+  stroke-width: 1;
+}
+
+.chart-baseline {
+  stroke: rgba(11, 37, 48, 0.24);
+  stroke-width: 1;
+}
+
+.chart-axis-text {
+  fill: #71838a;
+  font-size: 10px;
+}
+
+.chart-value-text {
+  fill: var(--deep);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.chart-column-label {
+  fill: #304a54;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.chart-bar-volume {
+  fill: var(--spring);
+}
+
+.chart-bar-expected {
+  fill: var(--spring);
+}
+
+.chart-bar-reported {
+  fill: var(--aqua);
+}
+
+.chart-bar-spring {
+  fill: var(--spring);
+}
+
+.chart-bar-aqua {
+  fill: var(--aqua);
+}
+
+.chart-bar-amber {
+  fill: var(--amber);
+}
+
+.chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin: 0 0 4px;
+  color: #71838a;
+  font-size: 11px;
+}
+
+.chart-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 5px;
+  border-radius: 3px;
+  vertical-align: -1px;
+}
+
+.chart-swatch-expected {
+  background: var(--spring);
+}
+
+.chart-swatch-reported {
+  background: var(--aqua);
+}
+
+.dashboard-table tfoot th,
+.dashboard-table tfoot td {
+  padding: 12px;
+  border-top: 1px solid rgba(11, 37, 48, 0.14);
+  font-weight: 700;
+  color: var(--deep);
+}
+
+.dashboard-table tfoot th {
+  text-align: left;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* ---------- Stakeholder analytics (Story 09) ---------- */
+
+.analytics-controls {
+  justify-content: flex-start;
+  gap: 16px;
+  padding-bottom: 16px;
+}
+
+.analytics-month {
+  margin: 0 0 12px;
+  color: #71838a;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.analytics-card {
+  padding: 26px 30px;
+}
+
+.analytics-tabs {
+  display: inline-flex;
+  gap: 6px;
+  padding: 4px;
+  margin-bottom: 16px;
+  border: 1px solid rgba(11, 37, 48, 0.1);
+  border-radius: 999px;
+  background: var(--ground);
+}
+
+.analytics-tab {
+  border: 0;
+  border-radius: 999px;
+  padding: 7px 14px;
+  background: transparent;
+  color: #304a54;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.analytics-tab:hover {
+  color: var(--spring);
+}
+
+.analytics-tab-active {
+  background: var(--spring);
+  color: #fff;
+}
+
+.analytics-tab-active:hover {
+  color: #fff;
+}
+
+.analytics-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.analytics-panel .chart-card {
+  max-width: 620px;
+}
+
+.analytics-note {
+  margin: 0;
+  color: #5c7480;
+  font-size: 12px;
+}
+
+.comparison-chart {
+  margin-top: 2px;
+}
+
+@media (max-width: 760px) {
+  .dashboard-metrics,
+  .analytics-card {
+    padding: 18px;
+  }
+
+  .dashboard-charts {
+    grid-template-columns: 1fr;
+  }
+}
+
 @media (max-width: 760px) {
   .review-summary {
     grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));

@@ -1,21 +1,14 @@
 'use client';
 
 import Link from 'next/link';
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import {
-  EMPTY_RANGE,
-  describeRange,
-  presetRange,
-  rangeToQuery,
-  validateDateRange,
-  type DateRange,
-  type PresetKey,
-} from '../../lib/dateRange';
+import { useCallback, useMemo, useState } from 'react';
+import { describeRange } from '../../lib/dateRange';
+import { useDashboardData } from '../../lib/useDashboardData';
 import { DateRangeFilter } from './date-range-filter';
+import { DashboardCharts, DailyMetricsTable } from './dashboard-metrics';
 import { ReportMenu } from './report-menu';
 import { downloadReport, type ReportFormat } from '../../lib/reports';
 import {
-  fetchReconciliation,
   getReviewFlags,
   getReviewTone,
   getVarianceRatio,
@@ -244,70 +237,21 @@ export function ReviewSummaryCards({ summary }: { summary: ReviewSummary }) {
 }
 
 /**
- * Read-only Operations Review for Operation Managers. Reads the server's
- * reconciliation view; the data is interpreted on the server, so this view
- * only decides what to highlight and never recalculates the flags itself.
+ * Operations dashboard for Operation Managers (Stories 04, 06 and 07).
+ *
+ * The date filter state lives in `useDashboardData` (Story 06): a preset or an
+ * applied custom range immediately reloads the summary cards, the daily
+ * metrics table, both graphs and the records table from the server, while an
+ * invalid custom range keeps the inline error and never triggers a request.
+ * The server interprets the metrics, so this view only highlights flags and
+ * never recomputes the anomaly or revenue rules itself.
  */
 export default function OperationsReview() {
-  const [records, setRecords] = useState<ReconciliationRecord[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const dashboard = useDashboardData();
   const [flaggedOnly, setFlaggedOnly] = useState(false);
-  const [attempt, setAttempt] = useState(0);
-  const [preset, setPreset] = useState<PresetKey>('all');
-  const [range, setRange] = useState<DateRange>(EMPTY_RANGE);
-  const [appliedRange, setAppliedRange] = useState<DateRange>(EMPTY_RANGE);
   const [reportOpen, setReportOpen] = useState(false);
   const [exporting, setExporting] = useState<ReportFormat | null>(null);
   const [reportError, setReportError] = useState<string | null>(null);
-
-  // Inline error for the custom pickers; a non-null value also blocks Apply.
-  const rangeError = useMemo(() => validateDateRange(range), [range]);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    fetchReconciliation(rangeToQuery(appliedRange), controller.signal)
-      .then((page) => {
-        setRecords(page.records);
-        setError(null);
-      })
-      .catch((err: unknown) => {
-        if (controller.signal.aborted) return;
-        setRecords([]);
-        setError(
-          err instanceof Error ? err.message : 'Could not load reconciliation records.'
-        );
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setLoading(false);
-      });
-    return () => controller.abort();
-  }, [attempt, appliedRange]);
-
-  const refresh = useCallback(() => {
-    setLoading(true);
-    setError(null);
-    setAttempt((n) => n + 1);
-  }, []);
-
-  const applyPreset = useCallback((key: Exclude<PresetKey, 'custom'>) => {
-    const next = presetRange(key);
-    setLoading(true);
-    setPreset(key);
-    setRange(next);
-    setAppliedRange(next);
-  }, []);
-
-  const changeRange = useCallback((field: keyof DateRange, value: string) => {
-    setPreset('custom');
-    setRange((current) => ({ ...current, [field]: value }));
-  }, []);
-
-  const applyRange = useCallback(() => {
-    if (validateDateRange(range) !== null) return;
-    setLoading(true);
-    setAppliedRange(range);
-  }, [range]);
 
   const exportReport = useCallback(
     async (format: ReportFormat) => {
@@ -315,7 +259,7 @@ export default function OperationsReview() {
       setReportError(null);
       setExporting(format);
       try {
-        await downloadReport(format, appliedRange);
+        await downloadReport(format, dashboard.appliedRange);
       } catch (err: unknown) {
         setReportError(
           err instanceof Error ? err.message : 'Could not download the report.'
@@ -324,17 +268,23 @@ export default function OperationsReview() {
         setExporting(null);
       }
     },
-    [appliedRange]
+    [dashboard.appliedRange]
   );
 
   const visibleRecords = useMemo(
-    () => (flaggedOnly ? records.filter((record) => getReviewFlags(record).length > 0) : records),
-    [records, flaggedOnly]
+    () =>
+      flaggedOnly
+        ? dashboard.records.filter((record) => getReviewFlags(record).length > 0)
+        : dashboard.records,
+    [dashboard.records, flaggedOnly]
   );
-  const summary = useMemo(() => summarizeReconciliation(records), [records]);
+  const summary = useMemo(
+    () => summarizeReconciliation(dashboard.records),
+    [dashboard.records]
+  );
 
-  const showSummary = !error && (!loading || records.length > 0);
-  const refreshing = loading && records.length > 0;
+  const showDashboard =
+    !dashboard.error && (!dashboard.loading || dashboard.records.length > 0);
 
   return (
     <main className="operator-shell">
@@ -356,6 +306,9 @@ export default function OperationsReview() {
           <Link className="nav-link" href="/manager">
             Historical logs
           </Link>
+          <Link className="nav-link" href="/manager/stakeholder-analytics">
+            Stakeholder analytics
+          </Link>
         </nav>
       </header>
 
@@ -367,38 +320,64 @@ export default function OperationsReview() {
             <p className="heading-copy">
               Daily logs checked against expected revenue and the server&apos;s anomaly
               classification. Records the server flagged, and records where reported cash came in
-              below the expected revenue, are highlighted for triage.
+              below the expected revenue, are highlighted for triage. The date filter bounds every
+              table and graph on this page.
             </p>
           </div>
         </div>
 
-        {showSummary && <ReviewSummaryCards summary={summary} />}
+        <DateRangeFilter
+          preset={dashboard.preset}
+          range={dashboard.range}
+          error={dashboard.rangeError}
+          disabled={dashboard.loading}
+          onPreset={dashboard.onPreset}
+          onRangeChange={dashboard.onRangeChange}
+          onApply={dashboard.onApply}
+        />
+
+        {showDashboard && <ReviewSummaryCards summary={summary} />}
+
+        {showDashboard && (
+          <section
+            className="logs-card dashboard-metrics"
+            aria-labelledby="dashboard-metrics-title"
+          >
+            <div className="logs-card-heading">
+              <div>
+                <h2 id="dashboard-metrics-title">Metrics over time</h2>
+                <p className="dashboard-subtitle">
+                  {describeRange(dashboard.appliedRange)} · daily totals from the filtered
+                  records
+                </p>
+              </div>
+              {dashboard.refreshing && (
+                <span className="logs-count" role="status">
+                  Updating…
+                </span>
+              )}
+            </div>
+            <DashboardCharts metrics={dashboard.metrics} />
+            <DailyMetricsTable metrics={dashboard.metrics} />
+          </section>
+        )}
 
         <section className="logs-card" aria-labelledby="review-title">
           <div className="logs-card-heading">
             <h2 id="review-title">Reconciliation records</h2>
             <span className="logs-count">
-              {visibleRecords.length} of {records.length}{' '}
-              {records.length === 1 ? 'record' : 'records'} shown · {describeRange(appliedRange)}
+              {visibleRecords.length} of {dashboard.records.length}{' '}
+              {dashboard.records.length === 1 ? 'record' : 'records'} shown ·{' '}
+              {describeRange(dashboard.appliedRange)}
             </span>
           </div>
-
-          <DateRangeFilter
-            preset={preset}
-            range={range}
-            error={rangeError}
-            disabled={loading}
-            onPreset={applyPreset}
-            onRangeChange={changeRange}
-            onApply={applyRange}
-          />
 
           <div className="review-controls">
             <label className="review-filter">
               <input
                 type="checkbox"
                 checked={flaggedOnly}
-                disabled={records.length === 0}
+                disabled={dashboard.records.length === 0}
                 onChange={(event) => setFlaggedOnly(event.target.checked)}
               />
               Only flagged records
@@ -407,15 +386,15 @@ export default function OperationsReview() {
               <button
                 className="button button-secondary"
                 type="button"
-                onClick={refresh}
-                disabled={loading}
+                onClick={dashboard.refresh}
+                disabled={dashboard.loading}
               >
-                {refreshing ? 'Refreshing…' : 'Refresh'}
+                {dashboard.refreshing ? 'Refreshing…' : 'Refresh'}
               </button>
               <ReportMenu
                 open={reportOpen}
-                disabled={rangeError !== null || loading}
-                disabledReason={rangeError ?? 'Loading records…'}
+                disabled={dashboard.rangeError !== null || dashboard.loading}
+                disabledReason={dashboard.rangeError ?? 'Loading records…'}
                 exporting={exporting}
                 onToggle={() => setReportOpen((open) => !open)}
                 onExport={exportReport}
@@ -444,14 +423,18 @@ export default function OperationsReview() {
             </li>
           </ul>
 
-          {error ? (
+          {dashboard.error ? (
             <div className="logs-message logs-message-error" role="alert">
-              <p>Could not load reconciliation records. {error}</p>
-              <button className="button button-secondary" type="button" onClick={refresh}>
+              <p>Could not load reconciliation records. {dashboard.error}</p>
+              <button
+                className="button button-secondary"
+                type="button"
+                onClick={dashboard.refresh}
+              >
                 Try again
               </button>
             </div>
-          ) : loading && records.length === 0 ? (
+          ) : dashboard.loading && dashboard.records.length === 0 ? (
             <p className="logs-message" role="status">
               Loading reconciliation records…
             </p>

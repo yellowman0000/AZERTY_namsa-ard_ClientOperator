@@ -66,6 +66,9 @@ export default function HistoricalLogs() {
           <Link className="nav-link" href="/manager/operations-review">
             Operations review
           </Link>
+          <Link className="nav-link" href="/manager/stakeholder-analytics">
+            Stakeholder analytics
+          </Link>
         </nav>
       </header>
 
