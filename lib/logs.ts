@@ -93,7 +93,7 @@ export interface AcceptReceiptResult {
   acceptedAt: string;
   acceptedBy: string | null;
   alreadyAccepted: boolean;
-  sheet: { status: SheetStatus; updatedRange?: string | null; message?: string };
+  sheet: { status: SheetStatus; updatedRange?: string | null; message?: string; retryable?: boolean };
 }
 
 /** Accept time is longer than a read: the server writes to Google Sheets first. */
