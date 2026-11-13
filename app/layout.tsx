@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import MockDataHost from "./mock-data/mock-data-host";
 import { ServiceWorkerRegistration } from "./sw-register";
 
 export const metadata: Metadata = {
@@ -12,6 +13,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     <html lang="en">
       <body>
         <ServiceWorkerRegistration />
+        <MockDataHost />
         {children}
       </body>
     </html>

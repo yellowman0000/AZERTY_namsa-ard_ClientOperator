@@ -79,3 +79,39 @@ Open [http://localhost:3000](http://localhost:3000). The operator posts heartbea
 When submitting while online, confirm the receipt displays the timestamp, operator ID, liter volume, cash submitted, checksum, and server signature. Use **Print / Save as PDF** to keep a copy.
 
 The service worker caches the app shell and its same-origin Next.js static assets after the first online visit. Browser storage is subject to quota and user-clearing, so keep readings available for recovery if local storage cannot be written. Offline evidence uses IndexedDB separately from the localStorage transaction queue to avoid storing image blobs in localStorage.
+
+## Mock data tool (demo fixtures)
+
+Every route has a floating orb in the bottom-right corner: a Siri-style circle that idles, reacts to
+hover/focus, and switches to a livelier "using" animation while fixtures are on. Clicking it opens the
+mock-data editor (or use the amber **Mock data active** chip that appears bottom-left while fixtures are
+loaded).
+
+- The master switch in the editor turns fixture data on or off. While it is on, every data view on the
+  page renders the temporary rows instead of calling the server — **no request is made for those
+  surfaces**, so the views can be demonstrated with the API down.
+- **Add row**, **Remove**, the inline fields and **Reset dataset** / **Reset all** edit the fixtures; every
+  bound view updates immediately. The date filter still bounds the operations dashboard (the fixture rows
+  are filtered by the same applied range), and `Load older logs` still pages through the log fixtures.
+- Fixtures are **in memory only**: they are cleared by a full page reload, while client-side navigation
+  between the app's routes keeps them. Nothing is ever written to `localStorage` and nothing reaches the
+  server.
+- Accepting a receipt while mock data is on stamps the fixture locally and reports a Google Sheet sync
+  without issuing the `POST`; with mock data off the real endpoint is used.
+
+| Dataset | Drives |
+|---|---|
+| Operations review records | KPI cards, both charts, daily metrics table/totals, records table, badges, receipt column, all empty states |
+| Historical logs | Log table, “N logs shown”, cursor pagination |
+| Log inspection | The read-only inspection modal, including the verified / mismatch / no-checksum verdicts |
+| Stakeholder analytics | Month payload: 3 KPI cards and both comparison tabs |
+| Offline queue | “Waiting to sync”, pending entries list, “All caught up” |
+| Isolated entries | “Isolated for review” counter |
+| Proof receipts | The signed receipt cards under the submission form |
+| Kiosk status | Status pill, heartbeat widget, kiosk ID |
+| Operator notice | The inline notice banner |
+
+Not mocked (still real, still needs the server): the Generate Report CSV/PDF export, daily submissions and
+evidence uploads. The tool is dependency-free — plain CSS in `app/globals.css`, fixtures under
+`lib/mockData/`, and the components under `app/mock-data/`. The orb, banner and editor respect
+`prefers-reduced-motion` and are hidden when printing.

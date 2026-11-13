@@ -8,7 +8,9 @@
  * for the previous month is aborted when the selection changes, so a slow
  * answer can never replace a newer month.
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { rowsOf, selectStakeholderAnalytics } from './mockData/selectors';
+import { useMockData } from './mockData/useMockData';
 import {
   currentMonthKey,
   fetchStakeholderAnalytics,
@@ -34,23 +36,43 @@ export function useStakeholderAnalytics(
   const [month, setMonth] = useState(() =>
     initialMonth && isMonthKey(initialMonth) ? initialMonth : currentMonthKey()
   );
-  const [analytics, setAnalytics] = useState<StakeholderAnalytics | null>(null);
+  const [fetchedAnalytics, setFetchedAnalytics] = useState<StakeholderAnalytics | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
+  const mock = useMockData();
+  const mockActive = mock.active;
+
+  // Derived in render (see useDashboardData): no cascading setState in effects.
+  const fixture = useMemo(
+    () =>
+      mockActive
+        ? selectStakeholderAnalytics(rowsOf(mock, 'stakeholder')[0], month)
+        : null,
+    [mockActive, mock, month]
+  );
+  const analytics = mockActive ? fixture : fetchedAnalytics;
+  const effectiveLoading = mockActive ? false : loading;
+  const effectiveError = mockActive
+    ? fixture
+      ? null
+      : 'No mock stakeholder payload yet — add a row in the mock data editor.'
+    : error;
 
   useEffect(() => {
+    if (mockActive) return;
+
     const controller = new AbortController();
 
     fetchStakeholderAnalytics(month, controller.signal)
       .then((data) => {
         if (controller.signal.aborted) return;
-        setAnalytics(data);
+        setFetchedAnalytics(data);
         setError(null);
       })
       .catch((err: unknown) => {
         if (controller.signal.aborted) return;
-        setAnalytics(null);
+        setFetchedAnalytics(null);
         setError(
           err instanceof Error
             ? err.message
@@ -62,7 +84,7 @@ export function useStakeholderAnalytics(
       });
 
     return () => controller.abort();
-  }, [month, attempt]);
+  }, [month, attempt, mockActive]);
 
   const selectMonth = useCallback(
     (next: string) => {
@@ -72,7 +94,7 @@ export function useStakeholderAnalytics(
       setError(null);
       // Drop the previous month's cards so they are never mistaken for the
       // newly selected month while the request is running.
-      setAnalytics(null);
+      setFetchedAnalytics(null);
       setMonth(trimmed);
     },
     [month]
@@ -87,9 +109,9 @@ export function useStakeholderAnalytics(
   return {
     month,
     analytics,
-    loading,
-    refreshing: loading && analytics !== null,
-    error,
+    loading: effectiveLoading,
+    refreshing: effectiveLoading && analytics !== null,
+    error: effectiveError,
     selectMonth,
     refresh,
   };

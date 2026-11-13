@@ -2,25 +2,42 @@
 
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
-import { fetchLogPage, type LogSummary } from '../../lib/logs';
+import { fetchLogPage, LOG_PAGE_SIZE, type LogSummary } from '../../lib/logs';
+import { rowsOf, selectLogPage } from '../../lib/mockData/selectors';
+import { useMockData } from '../../lib/mockData/useMockData';
 import { formatDateTime, formatLiters } from './format';
 import LogInspectionModal from './log-inspection-modal';
 
 export default function HistoricalLogs() {
-  const [logs, setLogs] = useState<LogSummary[]>([]);
-  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [fetchedLogs, setFetchedLogs] = useState<LogSummary[]>([]);
+  const [fetchedCursor, setFetchedCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [inspectingId, setInspectingId] = useState<string | null>(null);
+  /** Demo pagination: how many fixture pages "Load older logs" has revealed. */
+  const [mockPageCount, setMockPageCount] = useState(1);
+  const mock = useMockData();
+  const mockActive = mock.active;
+
+  // Derived in render so turning mock data on never needs a cascading effect.
+  const mockPage = mockActive
+    ? selectLogPage(rowsOf(mock, 'logs'), null, Math.max(1, mockPageCount) * LOG_PAGE_SIZE)
+    : null;
+  const logs = mockActive ? (mockPage?.data ?? []) : fetchedLogs;
+  const nextCursor = mockActive ? (mockPage?.nextCursor ?? null) : fetchedCursor;
+  const shownLoading = mockActive ? false : loading;
+  const shownError = mockActive ? null : error;
 
   // First page. State starts as "loading", so the effect only sets state once
   // the request settles.
   useEffect(() => {
+    if (mockActive) return;
+
     const controller = new AbortController();
     fetchLogPage(null, controller.signal)
       .then((page) => {
-        setLogs(page.data);
-        setNextCursor(page.nextCursor);
+        setFetchedLogs(page.data);
+        setFetchedCursor(page.nextCursor);
       })
       .catch((err: unknown) => {
         if (controller.signal.aborted) return;
@@ -30,16 +47,21 @@ export default function HistoricalLogs() {
         if (!controller.signal.aborted) setLoading(false);
       });
     return () => controller.abort();
-  }, []);
+  }, [mockActive]);
 
   // "Load older logs" and "Try again".
   const loadPage = async (cursor: string | null) => {
     setLoading(true);
     setError(null);
+    if (mockActive) {
+      setMockPageCount((current) => current + 1);
+      setLoading(false);
+      return;
+    }
     try {
       const page = await fetchLogPage(cursor);
-      setLogs((current) => (cursor ? [...current, ...page.data] : page.data));
-      setNextCursor(page.nextCursor);
+      setFetchedLogs((current) => (cursor ? [...current, ...page.data] : page.data));
+      setFetchedCursor(page.nextCursor);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not load logs.');
     }
@@ -136,14 +158,14 @@ export default function HistoricalLogs() {
             </div>
           )}
 
-          {error ? (
+          {shownError ? (
             <div className="logs-message logs-message-error" role="alert">
-              <p>Could not load logs. {error}</p>
+              <p>Could not load logs. {shownError}</p>
               <button className="button button-secondary" type="button" onClick={() => void loadPage(logs.length ? nextCursor : null)}>
                 Try again
               </button>
             </div>
-          ) : loading ? (
+          ) : shownLoading ? (
             <p className="logs-message" role="status">
               Loading logs…
             </p>

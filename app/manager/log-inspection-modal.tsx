@@ -10,6 +10,10 @@ import {
   type VerificationStatus,
 } from '../../lib/logs';
 import { formatAmount, formatDateTime, formatLiters } from './format';
+import { mockDataStore } from '../../lib/mockData';
+import { localStamp } from '../../lib/mockData/datasets';
+import { buildMockInspection, readText, rowsOf } from '../../lib/mockData/selectors';
+import { useMockData } from '../../lib/mockData/useMockData';
 
 const BADGES: Record<VerificationStatus, { tone: string; icon: string; label: string; detail: string }> = {
   VERIFIED: {
@@ -167,10 +171,7 @@ const SHEET_NOTICES: Record<
 > = {
   SYNCED: { tone: 'success', text: 'Receipt accepted and added to the Google Sheet.' },
   ALREADY_SYNCED: { tone: 'success', text: 'This receipt was already accepted and is in the Google Sheet.' },
-  PENDING: {
-    tone: 'warning',
-    text: 'Receipt accepted. The Google Sheet did not take the row yet; the server retries automatically.',
-  },
+  PENDING: { tone: 'warning', text: 'Receipt accepted, but the Google Sheet did not take the row yet.' },
   DISABLED: { tone: 'warning', text: 'Receipt accepted, but Google Sheets is not set up on the server yet.' },
 };
 
@@ -193,23 +194,67 @@ export default function LogInspectionModal({
   onAccepted?: (result: AcceptReceiptResult) => void;
 }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
-  const [inspection, setInspection] = useState<LogInspection | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [fetchedInspection, setFetchedInspection] = useState<LogInspection | null>(null);
+  const [fetchError, setFetchError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [attempt, setAttempt] = useState(0);
   const [accepting, setAccepting] = useState(false);
   const [acceptError, setAcceptError] = useState<string | null>(null);
   const [acceptResult, setAcceptResult] = useState<AcceptReceiptResult | null>(null);
   const reviewMode = onAccepted !== undefined;
+  const mock = useMockData();
+  const mockActive = mock.active;
+
+  // Demo fixtures are derived in render; the storage update in `accept` is what
+  // makes the accepted state appear (it bumps the store revision).
+  const fixtureInspection = mockActive
+    ? buildMockInspection(logId, {
+        reconciliation: rowsOf(mock, 'reconciliation'),
+        logs: rowsOf(mock, 'logs'),
+        inspection: rowsOf(mock, 'inspection'),
+      })
+    : null;
+  const inspection = mockActive ? fixtureInspection : fetchedInspection;
+  const error = mockActive
+    ? fixtureInspection
+      ? null
+      : 'No mock record has this id. Add one in the mock data editor, then verify again.'
+    : fetchError;
+  const shownLoading = mockActive ? false : loading;
 
   const accept = async () => {
     setAccepting(true);
     setAcceptError(null);
     try {
+      if (mockActive) {
+        // Demo mode: stamp the fixture and report a sheet sync without a request.
+        const snapshot = mockDataStore.getSnapshot();
+        const rows = rowsOf(snapshot, 'reconciliation');
+        const index = rows.findIndex(
+          (row) => readText(row.id) === logId || readText(row.transactionId) === logId
+        );
+        const acceptedAt = new Date().toISOString();
+        if (index >= 0) {
+          mockDataStore.updateField('reconciliation', index, 'acceptedAt', localStamp(new Date()));
+          mockDataStore.updateField('reconciliation', index, 'isSynced', true);
+        }
+        const result: AcceptReceiptResult = {
+          logId,
+          transactionId: inspection?.log.transactionId ?? logId,
+          acceptedAt,
+          acceptedBy: null,
+          alreadyAccepted: false,
+          sheet: { status: 'SYNCED' },
+        };
+        setAcceptResult(result);
+        onAccepted?.(result);
+        return;
+      }
+
       const result = await acceptReceipt(logId);
       setAcceptResult(result);
       const inSheet = result.sheet.status === 'SYNCED' || result.sheet.status === 'ALREADY_SYNCED';
-      setInspection((current) =>
+      setFetchedInspection((current) =>
         current ? { ...current, log: { ...current.log, acceptedAt: result.acceptedAt, isSynced: inSheet } } : current
       );
       onAccepted?.(result);
@@ -222,6 +267,9 @@ export default function LogInspectionModal({
 
   const tampered = inspection?.verification.status === 'CHECKSUM_MISMATCH';
   const alreadyAccepted = Boolean(inspection?.log.acceptedAt);
+  // Accepted, but the sheet has not taken the row (e.g. a header problem that
+  // was fixed since): accepting again is safe and resends just this row.
+  const canResend = reviewMode && alreadyAccepted && inspection?.log.isSynced === false;
   const sheetNotice = acceptResult ? SHEET_NOTICES[acceptResult.sheet.status] : null;
 
   useEffect(() => {
@@ -232,19 +280,21 @@ export default function LogInspectionModal({
   useEffect(() => {
     // Starts in the loading state; "Verify again" resets it before bumping
     // `attempt`, so the effect itself never sets state synchronously.
+    if (mockActive) return;
+
     const controller = new AbortController();
     fetchLogInspection(logId, controller.signal)
-      .then(setInspection)
+      .then(setFetchedInspection)
       .catch((err: unknown) => {
         if (controller.signal.aborted) return;
-        setInspection(null); // never leave an outdated badge on screen
-        setError(err instanceof Error ? err.message : 'Could not load this log.');
+        setFetchedInspection(null); // never leave an outdated badge on screen
+        setFetchError(err instanceof Error ? err.message : 'Could not load this log.');
       })
       .finally(() => {
         if (!controller.signal.aborted) setLoading(false);
       });
     return () => controller.abort();
-  }, [logId, attempt]);
+  }, [logId, attempt, mockActive]);
 
   // Closing goes through the native dialog so the browser returns focus to the
   // button that opened it; the `close` event then unmounts the modal.
@@ -255,7 +305,7 @@ export default function LogInspectionModal({
       ref={dialogRef}
       className="inspect-dialog"
       aria-labelledby="inspect-title"
-      aria-busy={loading}
+      aria-busy={shownLoading}
       onClose={onClose}
       onClick={(event) => {
         if (event.target === event.currentTarget) close(); // backdrop click
@@ -287,9 +337,14 @@ export default function LogInspectionModal({
         {sheetNotice && (
           <p className={`receipt-notice receipt-notice-${sheetNotice.tone}`} role="status">
             {sheetNotice.text}
-            {acceptResult?.sheet.status === 'PENDING' && acceptResult.sheet.message
-              ? ` ${acceptResult.sheet.message}`
-              : ''}
+            {acceptResult?.sheet.status === 'PENDING' && (
+              <>
+                {acceptResult.sheet.message && <> Reason: {acceptResult.sheet.message}</>}
+                {acceptResult.sheet.retryable
+                  ? ' The server retries automatically.'
+                  : ' Fix the problem, then use Send to sheet again.'}
+              </>
+            )}
           </p>
         )}
         {acceptError && (
@@ -313,23 +368,32 @@ export default function LogInspectionModal({
             <button
               className="button button-secondary"
               type="button"
-              disabled={loading}
+              disabled={shownLoading}
               onClick={() => {
                 setLoading(true);
-                setError(null);
+                setFetchError(null);
                 setAttempt((n) => n + 1);
               }}
             >
-              {loading ? 'Verifying…' : error ? 'Try again' : 'Verify again'}
+              {shownLoading ? 'Verifying…' : error ? 'Try again' : 'Verify again'}
             </button>
             {reviewMode && !alreadyAccepted ? (
               <button
                 className="button button-primary"
                 type="button"
-                disabled={loading || accepting || !inspection || tampered}
+                disabled={shownLoading || accepting || !inspection || tampered}
                 onClick={() => void accept()}
               >
                 {accepting ? 'Accepting…' : 'Accept'}
+              </button>
+            ) : canResend ? (
+              <button
+                className="button button-primary"
+                type="button"
+                disabled={shownLoading || accepting}
+                onClick={() => void accept()}
+              >
+                {accepting ? 'Sending…' : 'Send to sheet again'}
               </button>
             ) : (
               <button className="button button-primary" type="button" onClick={close}>

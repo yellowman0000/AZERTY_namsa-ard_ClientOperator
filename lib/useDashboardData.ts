@@ -30,6 +30,8 @@ import {
   sameRange,
 } from './dateFilterState';
 import { buildDashboardMetrics, type DashboardMetrics } from './dashboardMetrics';
+import { rowsOf, selectReconciliationRecords } from './mockData/selectors';
+import { useMockData } from './mockData/useMockData';
 import { fetchReconciliation, type ReconciliationRecord } from './reconciliation';
 
 export interface DashboardData {
@@ -62,10 +64,12 @@ export function useDashboardData(): DashboardData {
     dateFilterReducer,
     INITIAL_DATE_FILTER_STATE
   );
-  const [records, setRecords] = useState<ReconciliationRecord[]>([]);
+  const [fetchedRecords, setFetchedRecords] = useState<ReconciliationRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
+  const mock = useMockData();
+  const mockActive = mock.active;
 
   const rangeError = useMemo(
     () => validateDateRange(filter.range),
@@ -81,7 +85,22 @@ export function useDashboardData(): DashboardData {
   const startDate = applied.startDate ?? '';
   const endDate = applied.endDate ?? '';
 
+  // Demo fixtures are derived during render, not stored: toggling mock data or
+  // editing a row re-reads the store, and the same range filter still applies.
+  const fixtureRecords = useMemo(
+    () =>
+      mockActive
+        ? selectReconciliationRecords(rowsOf(mock, 'reconciliation'), applied)
+        : null,
+    [mockActive, mock, applied]
+  );
+  const records = fixtureRecords ?? fetchedRecords;
+  const effectiveLoading = mockActive ? false : loading;
+  const effectiveError = mockActive ? null : error;
+
   useEffect(() => {
+    if (mockActive) return;
+
     const controller = new AbortController();
     const query = {
       ...(startDate ? { startDate } : {}),
@@ -91,12 +110,12 @@ export function useDashboardData(): DashboardData {
     fetchReconciliation(query, controller.signal)
       .then((page) => {
         if (controller.signal.aborted) return;
-        setRecords(page.records);
+        setFetchedRecords(page.records);
         setError(null);
       })
       .catch((err: unknown) => {
         if (controller.signal.aborted) return;
-        setRecords([]);
+        setFetchedRecords([]);
         setError(
           err instanceof Error
             ? err.message
@@ -108,7 +127,7 @@ export function useDashboardData(): DashboardData {
       });
 
     return () => controller.abort();
-  }, [startDate, endDate, attempt]);
+  }, [startDate, endDate, attempt, mockActive]);
 
   const onPreset = useCallback(
     (preset: Exclude<PresetKey, 'custom'>) => {
@@ -148,9 +167,9 @@ export function useDashboardData(): DashboardData {
     rangeError,
     records,
     metrics,
-    loading,
-    refreshing: loading && records.length > 0,
-    error,
+    loading: effectiveLoading,
+    refreshing: effectiveLoading && records.length > 0,
+    error: effectiveError,
     onPreset,
     onRangeChange,
     onApply,

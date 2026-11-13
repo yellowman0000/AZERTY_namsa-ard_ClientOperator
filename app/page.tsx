@@ -33,6 +33,15 @@ import {
   QUARANTINE_KEY,
   syncDispatcher,
 } from '../lib/queue';
+import { mockDataStore } from '../lib/mockData';
+import {
+  rowsOf,
+  selectKioskStatus,
+  selectNotice,
+  selectQueuePayloads,
+  selectReceipts,
+} from '../lib/mockData/selectors';
+import { useMockData } from '../lib/mockData/useMockData';
 
 const kioskId = process.env.NEXT_PUBLIC_KIOSK_ID || 'KIOSK-001';
 const configuredOperatorId = process.env.NEXT_PUBLIC_OPERATOR_ID || '';
@@ -41,6 +50,7 @@ type Notice = { kind: 'success' | 'warning' | 'error'; text: string };
 
 function subscribeToQueue(onStoreChange: () => void) {
   const unsubscribe = syncDispatcher.subscribe(onStoreChange);
+  const unsubscribeMock = mockDataStore.subscribe(onStoreChange);
   const onStorage = (event: StorageEvent) => {
     if ([QUEUE_KEY, QUARANTINE_KEY, PROCESSED_KEY].includes(event.key ?? '')) {
       onStoreChange();
@@ -49,6 +59,7 @@ function subscribeToQueue(onStoreChange: () => void) {
   window.addEventListener('storage', onStorage);
   return () => {
     unsubscribe();
+    unsubscribeMock();
     window.removeEventListener('storage', onStorage);
   };
 }
@@ -63,8 +74,16 @@ function subscribeToNetwork(onStoreChange: () => void) {
 }
 
 const getNetworkStatus = () => typeof navigator === 'undefined' || navigator.onLine;
-const getPendingSnapshot = () => JSON.stringify(syncDispatcher.getQueue());
-const getQuarantineSnapshot = () => syncDispatcher.getQuarantineQueue().length;
+const getPendingSnapshot = () => {
+  const snapshot = mockDataStore.getSnapshot();
+  if (snapshot.active) return JSON.stringify(selectQueuePayloads(rowsOf(snapshot, 'queue')));
+  return JSON.stringify(syncDispatcher.getQueue());
+};
+const getQuarantineSnapshot = () => {
+  const snapshot = mockDataStore.getSnapshot();
+  if (snapshot.active) return rowsOf(snapshot, 'quarantine').length;
+  return syncDispatcher.getQuarantineQueue().length;
+};
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -132,6 +151,8 @@ export default function OperatorConsole() {
     getQuarantineSnapshot,
     () => 0
   );
+  const mock = useMockData();
+  const mockActive = mock.active;
 
   const flushPending = useCallback(async () => {
     if (flushing.current || syncDispatcher.getQueue().length === 0) return;
@@ -372,11 +393,23 @@ export default function OperatorConsole() {
     }
   };
 
-  const status = !isOnline
+  // Demo fixtures replace the live values while mock data is on; every branch
+  // below falls back to the real value when it is off.
+  const mockStatus = mockActive ? selectKioskStatus(rowsOf(mock, 'kioskStatus')[0]) : null;
+  const mockNotice = mockActive ? selectNotice(rowsOf(mock, 'notice')[0]) : null;
+  const shownReceipts = mockActive ? selectReceipts(rowsOf(mock, 'receipts')) : receipts;
+  const shownNotice = mockActive ? mockNotice : notice;
+  const shownKioskId = mockStatus?.kioskId ? mockStatus.kioskId : kioskId;
+  const shownPingTime = mockStatus ? mockStatus.lastPingTime : lastPingTime;
+  const isOnlineShown = mockStatus ? mockStatus.isOnline : isOnline;
+  const connectionShown = mockStatus ? mockStatus.connection : connection;
+  const pingStatusShown = mockStatus ? mockStatus.pingStatus : pingStatus;
+
+  const status = !isOnlineShown
     ? 'offline'
-    : connection === 'dropped' || pingStatus === 'failed'
+    : connectionShown === 'dropped' || pingStatusShown === 'failed'
       ? 'offline'
-      : connection === 'retrying' || pingStatus === 'idle'
+      : connectionShown === 'retrying' || pingStatusShown === 'idle'
         ? 'checking'
         : 'online';
   const statusLabel =
@@ -415,7 +448,7 @@ export default function OperatorConsole() {
       <section className="operator-dashboard">
         <div className="operator-heading">
           <div>
-            <p className="eyebrow">KIOSK OPERATIONS · {kioskId}</p>
+            <p className="eyebrow">KIOSK OPERATIONS · {shownKioskId}</p>
             <h1>Daily cash &amp; liter submission</h1>
             <p className="heading-copy">Submit the operator’s daily meter volume and cash total. Entries are kept safely if the connection drops.</p>
           </div>
@@ -423,7 +456,7 @@ export default function OperatorConsole() {
             <span className={`heartbeat-indicator indicator-${status}`} />
             <span>
               <strong>{statusLabel}</strong>
-              <small>{lastPingTime ? `Heartbeat ${lastPingTime}` : 'Waiting for server heartbeat'}</small>
+              <small>{shownPingTime ? `Heartbeat ${shownPingTime}` : 'Waiting for server heartbeat'}</small>
             </span>
           </div>
         </div>
@@ -558,9 +591,9 @@ export default function OperatorConsole() {
               </button>
             </form>
 
-            {notice && (
-              <p className={`notice notice-${notice.kind}`} role="status" aria-live="polite">
-                {notice.text}
+            {shownNotice && (
+              <p className={`notice notice-${shownNotice.kind}`} role="status" aria-live="polite">
+                {shownNotice.text}
               </p>
             )}
             <p className="integrity-note">
@@ -622,7 +655,7 @@ export default function OperatorConsole() {
             )}
           </aside>
         </div>
-        {receipts.map((item, index) => (
+        {shownReceipts.map((item, index) => (
           <ProofReceipt
             key={item.receiptId}
             receipt={item}
