@@ -27,6 +27,13 @@ export interface InspectedLog extends LogSummary {
   expectedRevenue: number | null;
   variance: number | null;
   isAnomaly: boolean | null;
+  /** Evidence photo the operator attached to the receipt. */
+  proofImageUrl?: string | null;
+  waterType?: string | null;
+  /** Written to Google Sheets. */
+  isSynced?: boolean | null;
+  /** When a manager accepted the receipt; `null` while it awaits review. */
+  acceptedAt?: string | null;
 }
 
 export interface ChecksumVerification {
@@ -76,4 +83,49 @@ export function fetchLogPage(cursor: string | null, signal?: AbortSignal): Promi
 /** A log's stored details plus a checksum check the server runs on every call. */
 export function fetchLogInspection(logId: string, signal?: AbortSignal): Promise<LogInspection> {
   return getJson(`/api/kiosk/logs/${encodeURIComponent(logId)}/inspect`, signal);
+}
+
+export type SheetStatus = 'SYNCED' | 'ALREADY_SYNCED' | 'PENDING' | 'DISABLED';
+
+export interface AcceptReceiptResult {
+  logId: string;
+  transactionId: string;
+  acceptedAt: string;
+  acceptedBy: string | null;
+  alreadyAccepted: boolean;
+  sheet: { status: SheetStatus; updatedRange?: string | null; message?: string };
+}
+
+/** Accept time is longer than a read: the server writes to Google Sheets first. */
+export const ACCEPT_TIMEOUT_MS = 20_000;
+
+/**
+ * Manager accepts an operator receipt. The server stamps the log and adds it
+ * to Google Sheets; accepting twice never adds a second row.
+ */
+export async function acceptReceipt(logId: string, managerId?: string): Promise<AcceptReceiptResult> {
+  let res: Response;
+  try {
+    res = await fetchWithTimeout(
+      `/api/kiosk/logs/${encodeURIComponent(logId)}/accept`,
+      {
+        method: 'POST',
+        headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+        body: JSON.stringify(managerId ? { managerId } : {}),
+      },
+      ACCEPT_TIMEOUT_MS
+    );
+  } catch {
+    throw new Error("Couldn't reach the server. Check the connection and try again.");
+  }
+
+  const body: unknown = await res.json().catch(() => null);
+  if (!res.ok) {
+    const message =
+      body && typeof body === 'object' && 'message' in body && typeof body.message === 'string'
+        ? body.message
+        : `The server answered ${res.status}.`;
+    throw new Error(message);
+  }
+  return body as AcceptReceiptResult;
 }

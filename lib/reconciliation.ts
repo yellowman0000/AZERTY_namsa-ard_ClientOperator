@@ -31,6 +31,10 @@ export interface ReconciliationRecord {
   proofImageUrl?: string | null;
   waterType?: string;
   isReadByManager?: boolean;
+  /** Written to Google Sheets. */
+  isSynced?: boolean;
+  /** When a manager accepted the operator receipt; `null` while awaiting review. */
+  acceptedAt?: string | null;
   recordedAt: string;
   createdAt?: string | null;
 }

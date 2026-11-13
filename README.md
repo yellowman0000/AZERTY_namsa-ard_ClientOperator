@@ -31,6 +31,7 @@ Checksum format and dispatcher behavior are documented in [docs/CHECKSUM_AND_DIS
 - A row that trips both carries both badges; a row with neither shows **Clear**.
 - Summary cards show records reviewed, flagged anomalies, revenue variance alerts, and net variance. **Only flagged records** narrows the table for triage, and **Refresh** re-reads the server.
 - The endpoint is unpaginated, so the table renders the newest 200 matching records and says so when there are more.
+- **Receipt review → Google Sheet.** The **Receipt** column shows *Awaiting review*, *Accepted · sheet pending* or *Accepted · in Google Sheet*. **Review** opens the operator receipt (evidence photo, figures, checksum check); **Accept** calls `POST /api/kiosk/logs/:id/accept`, and the server adds the record to the Google Sheet. A receipt whose checksum no longer matches cannot be accepted. **Only receipts awaiting review** narrows the table to what still needs a decision.
 
 ### Date filter binding (Story 06)
 
@@ -41,7 +42,7 @@ The date filter above the dashboard bounds **every** table and graph on the page
 - `useDashboardData` (`lib/useDashboardData.ts`) owns the filter state and the request: selecting a valid interval changes `appliedRange`, which refetches `GET /api/kiosk/reconciliation?startDate=…&endDate=…`. Stale requests are aborted when the range changes quickly, and the last valid data stays on screen while the next range loads.
 - The **Metrics over time** section aggregates the filtered records into local calendar days: a daily totals table, a daily meter-volume bar chart and an expected-vs-reported revenue chart. Both charts are dependency-free inline SVG with an accessible title/description (the daily table is the text alternative). Empty ranges render an empty state instead of empty charts.
 
-The view is read-only and needs the server; it is not available offline.
+Apart from accepting receipts, the view is read-only. It needs the server and is not available offline.
 
 The anomaly rule behind `isAnomaly` is computed on the server (Sprint 2 story 04, backend task). This view deliberately does not restate the rule in its copy, so the table stays accurate when the backend rule changes.
 

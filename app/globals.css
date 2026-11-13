@@ -2083,3 +2083,92 @@ input {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ---------- Operator receipt review (manager accepts → Google Sheet) ---------- */
+
+.receipt-status {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+.receipt-status-pending {
+  background: #eef2f4;
+  color: #4b5f67;
+}
+
+.receipt-status-accepted {
+  background: #fdf1d8;
+  color: #8a5a08;
+}
+
+.receipt-status-synced {
+  background: #e5f5ee;
+  color: #17805c;
+}
+
+.receipt-status-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 14px;
+  color: #71838a;
+  font-size: 12px;
+}
+
+.receipt-evidence {
+  margin: 18px 0 0;
+}
+
+.receipt-evidence figcaption {
+  margin-bottom: 8px;
+  color: #71838a;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.receipt-evidence img {
+  display: block;
+  width: 100%;
+  max-height: 360px;
+  object-fit: contain;
+  border: 1px solid #edf1f2;
+  border-radius: 14px;
+  background: #f7fafb;
+}
+
+.receipt-evidence p {
+  margin: 0;
+  color: #71838a;
+  font-size: 13px;
+}
+
+.receipt-notice {
+  margin: 18px 0 0;
+  padding: 10px 14px;
+  border-radius: 14px;
+  font-size: 13px;
+}
+
+.receipt-notice-success {
+  background: #e5f5ee;
+  color: #17805c;
+}
+
+.receipt-notice-warning {
+  background: #fdf1d8;
+  color: #8a5a08;
+}
+
+.receipt-notice-error {
+  background: #fdebe9;
+  color: #a72a24;
+}

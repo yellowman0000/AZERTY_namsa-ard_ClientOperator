@@ -7,6 +7,7 @@ import { useDashboardData } from '../../lib/useDashboardData';
 import { DateRangeFilter } from './date-range-filter';
 import { DashboardCharts, DailyMetricsTable } from './dashboard-metrics';
 import { ReportMenu } from './report-menu';
+import LogInspectionModal, { ReceiptStatus } from './log-inspection-modal';
 import { downloadReport, type ReportFormat } from '../../lib/reports';
 import {
   getReviewFlags,
@@ -41,6 +42,9 @@ const FLAG_BADGES: Record<ReviewFlag, { className: string; label: string; detail
 
 const EMPTY_MESSAGE = 'No reconciliation records to review.';
 const EMPTY_FLAGGED_MESSAGE = 'No records are flagged right now.';
+const EMPTY_AWAITING_MESSAGE = 'Every receipt in this range has been accepted.';
+
+const isAwaitingReview = (record: ReconciliationRecord) => !record.acceptedAt;
 
 /** The endpoint has no pagination; render the newest records and say so. */
 export const REVIEW_DISPLAY_LIMIT = 200;
@@ -98,10 +102,13 @@ export function ReviewTable({
   records,
   emptyMessage = EMPTY_MESSAGE,
   displayLimit = REVIEW_DISPLAY_LIMIT,
+  onReview,
 }: {
   records: ReconciliationRecord[];
   emptyMessage?: string;
   displayLimit?: number;
+  /** Opens the operator receipt so the manager can check and accept it. */
+  onReview?: (record: ReconciliationRecord) => void;
 }) {
   if (records.length === 0) {
     return <p className="logs-message">{emptyMessage}</p>;
@@ -144,6 +151,12 @@ export function ReviewTable({
                 Variance %
               </th>
               <th scope="col">Triage</th>
+              <th scope="col">Receipt</th>
+              {onReview && (
+                <th scope="col">
+                  <span className="visually-hidden">Actions</span>
+                </th>
+              )}
             </tr>
           </thead>
           <tbody>
@@ -191,6 +204,21 @@ export function ReviewTable({
                   <td className="review-triage">
                     <ReviewBadges record={record} />
                   </td>
+                  <td className="review-triage">
+                    <ReceiptStatus acceptedAt={record.acceptedAt} isSynced={record.isSynced} />
+                  </td>
+                  {onReview && (
+                    <td className="logs-action">
+                      <button
+                        className={`button ${isAwaitingReview(record) ? 'button-primary' : 'button-secondary'}`}
+                        type="button"
+                        aria-label={`${isAwaitingReview(record) ? 'Review' : 'View'} receipt ${record.transactionId}`}
+                        onClick={() => onReview(record)}
+                      >
+                        {isAwaitingReview(record) ? 'Review' : 'View'}
+                      </button>
+                    </td>
+                  )}
                 </tr>
               );
             })}
@@ -249,6 +277,8 @@ export function ReviewSummaryCards({ summary }: { summary: ReviewSummary }) {
 export default function OperationsReview() {
   const dashboard = useDashboardData();
   const [flaggedOnly, setFlaggedOnly] = useState(false);
+  const [awaitingOnly, setAwaitingOnly] = useState(false);
+  const [reviewingId, setReviewingId] = useState<string | null>(null);
   const [reportOpen, setReportOpen] = useState(false);
   const [exporting, setExporting] = useState<ReportFormat | null>(null);
   const [reportError, setReportError] = useState<string | null>(null);
@@ -273,10 +303,16 @@ export default function OperationsReview() {
 
   const visibleRecords = useMemo(
     () =>
-      flaggedOnly
-        ? dashboard.records.filter((record) => getReviewFlags(record).length > 0)
-        : dashboard.records,
-    [dashboard.records, flaggedOnly]
+      dashboard.records.filter(
+        (record) =>
+          (!flaggedOnly || getReviewFlags(record).length > 0) &&
+          (!awaitingOnly || isAwaitingReview(record))
+      ),
+    [dashboard.records, flaggedOnly, awaitingOnly]
+  );
+  const awaitingCount = useMemo(
+    () => dashboard.records.filter(isAwaitingReview).length,
+    [dashboard.records]
   );
   const summary = useMemo(
     () => summarizeReconciliation(dashboard.records),
@@ -320,8 +356,9 @@ export default function OperationsReview() {
             <p className="heading-copy">
               Daily logs checked against expected revenue and the server&apos;s anomaly
               classification. Records the server flagged, and records where reported cash came in
-              below the expected revenue, are highlighted for triage. The date filter bounds every
-              table and graph on this page.
+              below the expected revenue, are highlighted for triage. Review each operator receipt
+              and accept it to add it to the Google Sheet. The date filter bounds every table and
+              graph on this page.
             </p>
           </div>
         </div>
@@ -382,6 +419,15 @@ export default function OperationsReview() {
               />
               Only flagged records
             </label>
+            <label className="review-filter">
+              <input
+                type="checkbox"
+                checked={awaitingOnly}
+                disabled={dashboard.records.length === 0}
+                onChange={(event) => setAwaitingOnly(event.target.checked)}
+              />
+              Only receipts awaiting review ({awaitingCount})
+            </label>
             <div className="review-actions">
               <button
                 className="button button-secondary"
@@ -441,7 +487,10 @@ export default function OperationsReview() {
           ) : (
             <ReviewTable
               records={visibleRecords}
-              emptyMessage={flaggedOnly ? EMPTY_FLAGGED_MESSAGE : EMPTY_MESSAGE}
+              emptyMessage={
+                awaitingOnly ? EMPTY_AWAITING_MESSAGE : flaggedOnly ? EMPTY_FLAGGED_MESSAGE : EMPTY_MESSAGE
+              }
+              onReview={(record) => setReviewingId(record.id)}
             />
           )}
         </section>
@@ -449,8 +498,16 @@ export default function OperationsReview() {
 
       <footer className="operator-footer">
         <span>Nam Sa-ard · Operator</span>
-        <span>Read-only reconciliation review</span>
+        <span>Accepted receipts are added to the Google Sheet</span>
       </footer>
+
+      {reviewingId && (
+        <LogInspectionModal
+          logId={reviewingId}
+          onClose={() => setReviewingId(null)}
+          onAccepted={() => dashboard.refresh()}
+        />
+      )}
     </main>
   );
 }

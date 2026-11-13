@@ -2,7 +2,9 @@
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
+  acceptReceipt,
   fetchLogInspection,
+  type AcceptReceiptResult,
   type ChecksumFormat,
   type LogInspection,
   type VerificationStatus,
@@ -54,12 +56,40 @@ function Field({ label, children, wide }: { label: string; children: ReactNode; 
   );
 }
 
+/** Acceptance + Google Sheets state of a receipt, as shown to the manager. */
+export function ReceiptStatus({
+  acceptedAt,
+  isSynced,
+}: {
+  acceptedAt?: string | null;
+  isSynced?: boolean | null;
+}) {
+  if (!acceptedAt) {
+    return <span className="receipt-status receipt-status-pending">Awaiting review</span>;
+  }
+  return isSynced ? (
+    <span className="receipt-status receipt-status-synced">Accepted · in Google Sheet</span>
+  ) : (
+    <span className="receipt-status receipt-status-accepted">Accepted · sheet pending</span>
+  );
+}
+
 export function InspectionBody({ inspection }: { inspection: LogInspection }) {
   const { log, verification } = inspection;
   const badge = BADGES[verification.status];
 
   return (
     <>
+      {log.acceptedAt !== undefined && (
+        <p className="receipt-status-line">
+          <ReceiptStatus acceptedAt={log.acceptedAt} isSynced={log.isSynced} />
+          {log.acceptedAt && (
+            <span>
+              Accepted <Timestamp iso={log.acceptedAt} />
+            </span>
+          )}
+        </p>
+      )}
       <div className={`verify-panel verify-${badge.tone}`}>
         <p className="verify-badge" role="status">
           <span className="verify-icon" aria-hidden="true">
@@ -87,10 +117,28 @@ export function InspectionBody({ inspection }: { inspection: LogInspection }) {
         )}
         {log.variance !== null && <Field label="Variance">{formatAmount(log.variance)}</Field>}
         {log.isAnomaly !== null && <Field label="Volume anomaly">{log.isAnomaly ? 'Flagged' : 'None'}</Field>}
+        {log.waterType && (
+          <Field label="Water type">{log.waterType === 'SUBSIDIZED' ? 'Subsidized' : 'Commercial'}</Field>
+        )}
         <Field label="Log ID" wide>
           <code>{log.id}</code>
         </Field>
       </dl>
+
+      {log.proofImageUrl !== undefined && (
+        <figure className="receipt-evidence">
+          <figcaption>Evidence photo from the operator</figcaption>
+          {log.proofImageUrl ? (
+            <a href={log.proofImageUrl} target="_blank" rel="noreferrer">
+              {/* External evidence host (ImgBB); next/image would need its domain configured. */}
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={log.proofImageUrl} alt={`Evidence photo for receipt ${log.transactionId}`} />
+            </a>
+          ) : (
+            <p>No photo was attached to this receipt.</p>
+          )}
+        </figure>
+      )}
 
       {verification.status !== 'NO_CHECKSUM' && (
         <dl className="inspect-proof" aria-label="Checksum proof">
@@ -113,17 +161,68 @@ export function InspectionBody({ inspection }: { inspection: LogInspection }) {
   );
 }
 
+const SHEET_NOTICES: Record<
+  AcceptReceiptResult['sheet']['status'],
+  { tone: 'success' | 'warning'; text: string }
+> = {
+  SYNCED: { tone: 'success', text: 'Receipt accepted and added to the Google Sheet.' },
+  ALREADY_SYNCED: { tone: 'success', text: 'This receipt was already accepted and is in the Google Sheet.' },
+  PENDING: {
+    tone: 'warning',
+    text: 'Receipt accepted. The Google Sheet did not take the row yet; the server retries automatically.',
+  },
+  DISABLED: { tone: 'warning', text: 'Receipt accepted, but Google Sheets is not set up on the server yet.' },
+};
+
 /**
- * Read-only proof view of one stored log. The server recomputes the checksum
- * on every open and on "Verify again", so the badge reflects the record as it
- * is stored right now.
+ * Proof view of one stored log. The server recomputes the checksum on every
+ * open and on "Verify again", so the badge reflects the record as it is stored
+ * right now.
+ *
+ * Without `onAccepted` the modal is read-only (historical logs). With it, the
+ * manager reviews the operator receipt and can Accept it, which adds the log
+ * to the Google Sheet.
  */
-export default function LogInspectionModal({ logId, onClose }: { logId: string; onClose: () => void }) {
+export default function LogInspectionModal({
+  logId,
+  onClose,
+  onAccepted,
+}: {
+  logId: string;
+  onClose: () => void;
+  onAccepted?: (result: AcceptReceiptResult) => void;
+}) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const [inspection, setInspection] = useState<LogInspection | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [attempt, setAttempt] = useState(0);
+  const [accepting, setAccepting] = useState(false);
+  const [acceptError, setAcceptError] = useState<string | null>(null);
+  const [acceptResult, setAcceptResult] = useState<AcceptReceiptResult | null>(null);
+  const reviewMode = onAccepted !== undefined;
+
+  const accept = async () => {
+    setAccepting(true);
+    setAcceptError(null);
+    try {
+      const result = await acceptReceipt(logId);
+      setAcceptResult(result);
+      const inSheet = result.sheet.status === 'SYNCED' || result.sheet.status === 'ALREADY_SYNCED';
+      setInspection((current) =>
+        current ? { ...current, log: { ...current.log, acceptedAt: result.acceptedAt, isSynced: inSheet } } : current
+      );
+      onAccepted?.(result);
+    } catch (err) {
+      setAcceptError(err instanceof Error ? err.message : 'Could not accept this receipt.');
+    } finally {
+      setAccepting(false);
+    }
+  };
+
+  const tampered = inspection?.verification.status === 'CHECKSUM_MISMATCH';
+  const alreadyAccepted = Boolean(inspection?.log.acceptedAt);
+  const sheetNotice = acceptResult ? SHEET_NOTICES[acceptResult.sheet.status] : null;
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -165,8 +264,8 @@ export default function LogInspectionModal({ logId, onClose }: { logId: string; 
       <div className="inspect-panel">
         <header className="inspect-header">
           <div>
-            <p className="card-kicker">READ-ONLY · HISTORICAL LOG</p>
-            <h2 id="inspect-title">Log inspection</h2>
+            <p className="card-kicker">{reviewMode ? 'OPERATOR RECEIPT · REVIEW' : 'READ-ONLY · HISTORICAL LOG'}</p>
+            <h2 id="inspect-title">{reviewMode ? 'Review receipt' : 'Log inspection'}</h2>
           </div>
           <button className="inspect-close" type="button" aria-label="Close" onClick={close}>
             ×
@@ -185,8 +284,31 @@ export default function LogInspectionModal({ logId, onClose }: { logId: string; 
           </div>
         )}
 
+        {sheetNotice && (
+          <p className={`receipt-notice receipt-notice-${sheetNotice.tone}`} role="status">
+            {sheetNotice.text}
+            {acceptResult?.sheet.status === 'PENDING' && acceptResult.sheet.message
+              ? ` ${acceptResult.sheet.message}`
+              : ''}
+          </p>
+        )}
+        {acceptError && (
+          <p className="receipt-notice receipt-notice-error" role="alert">
+            Could not accept this receipt. {acceptError}
+          </p>
+        )}
+        {reviewMode && tampered && !alreadyAccepted && (
+          <p className="receipt-notice receipt-notice-error" role="alert">
+            This receipt changed after submission, so it cannot be accepted.
+          </p>
+        )}
+
         <footer className="inspect-footer">
-          <p>Read-only view. Records cannot be changed here.</p>
+          <p>
+            {reviewMode
+              ? 'Accepting adds this receipt to the Google Sheet. The record itself is not changed.'
+              : 'Read-only view. Records cannot be changed here.'}
+          </p>
           <div className="inspect-actions">
             <button
               className="button button-secondary"
@@ -200,9 +322,20 @@ export default function LogInspectionModal({ logId, onClose }: { logId: string; 
             >
               {loading ? 'Verifying…' : error ? 'Try again' : 'Verify again'}
             </button>
-            <button className="button button-primary" type="button" onClick={close}>
-              Close
-            </button>
+            {reviewMode && !alreadyAccepted ? (
+              <button
+                className="button button-primary"
+                type="button"
+                disabled={loading || accepting || !inspection || tampered}
+                onClick={() => void accept()}
+              >
+                {accepting ? 'Accepting…' : 'Accept'}
+              </button>
+            ) : (
+              <button className="button button-primary" type="button" onClick={close}>
+                Close
+              </button>
+            )}
           </div>
         </footer>
       </div>
