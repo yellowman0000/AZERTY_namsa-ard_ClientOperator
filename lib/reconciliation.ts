@@ -1,5 +1,5 @@
 /**
- * Operations Review data for Operation Managers (Story 04: Interpret Data).
+ * Manager dashboard data for Operation Managers (Story 04: Interpret Data).
  *
  * Reads the server's reconciliation view — `GET /api/kiosk/reconciliation` —
  * which returns every daily log together with the metrics the reconciliation

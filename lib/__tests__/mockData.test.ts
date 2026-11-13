@@ -7,6 +7,7 @@ import {
   readNumber,
   readText,
   rowsOf,
+  selectKioskFleet,
   selectKioskStatus,
   selectLogPage,
   selectNotice,
@@ -58,6 +59,7 @@ describe('mock data store', () => {
     expect(rowsOf(snapshot, 'logs')).toHaveLength(26);
     expect(rowsOf(snapshot, 'inspection')).toHaveLength(3);
     expect(rowsOf(snapshot, 'receipts')).toHaveLength(2);
+    expect(rowsOf(snapshot, 'kioskFleet')).toHaveLength(3);
     expect(notifications).toBeGreaterThan(0);
 
     unsubscribe();
@@ -154,7 +156,7 @@ describe('fixture value readers', () => {
   });
 });
 
-describe('operations review selector', () => {
+describe('manager dashboard selector', () => {
   const rows: FixtureRow[] = [
     { id: 'old', recordedAt: '2026-11-04T09:00', meterVolume: 100, expectedRevenue: 200, reportedCash: 200, variance: 0 },
     { id: 'new', recordedAt: '2026-11-06T18:00', meterVolume: 100, expectedRevenue: 200, reportedCash: 180, variance: -20 },
@@ -307,6 +309,36 @@ describe('operator page adapters', () => {
   });
 });
 
+describe('kiosk fleet status adapter', () => {
+  const rows: FixtureRow[] = [
+    { kioskId: 'KIOSK-003', status: 'OFFLINE', secondsSinceLastPing: 48.4 },
+    { kioskId: '  KIOSK-001  ', status: 'ONLINE', secondsSinceLastPing: 4 },
+    { kioskId: '', status: 'ONLINE', secondsSinceLastPing: 2 },
+    { kioskId: 'KIOSK-002', status: 'online', secondsSinceLastPing: 'not-a-number' },
+  ];
+
+  it('maps fixture rows to cards sorted by kiosk id', () => {
+    const fleet = selectKioskFleet(rows);
+
+    expect(fleet.kiosks.map((kiosk) => kiosk.kioskId)).toEqual([
+      'KIOSK-001',
+      'KIOSK-002',
+      'KIOSK-003',
+    ]);
+    expect(fleet.kiosks.map((kiosk) => kiosk.status)).toEqual([
+      'ONLINE',
+      'ONLINE',
+      'OFFLINE',
+    ]);
+    expect(fleet.kiosks.map((kiosk) => kiosk.secondsSinceLastPing)).toEqual([4, null, 48]);
+    expect(fleet.onlineCount).toBe(2);
+  });
+
+  it('returns an empty fleet for no rows', () => {
+    expect(selectKioskFleet([])).toEqual({ kiosks: [], onlineCount: 0 });
+  });
+});
+
 describe('dataset validation messages', () => {
   const byId = new Map(MOCK_DATASETS.map((dataset) => [dataset.id, dataset]));
 
@@ -332,6 +364,16 @@ describe('dataset validation messages', () => {
     expect(reconciliation?.validate?.(row)).toBeNull();
     expect(reconciliation?.validate?.({ ...row, meterVolume: 0 })).toBe(
       'Meter volume must be greater than 0.'
+    );
+  });
+
+  it('rejects a kiosk card without an id or with a negative heartbeat age', () => {
+    const fleet = byId.get('kioskFleet');
+    const row = fleet?.makeRow({ now: NOW, index: 0 }) ?? {};
+    expect(fleet?.validate?.(row)).toBeNull();
+    expect(fleet?.validate?.({ ...row, kioskId: '  ' })).toBe('Kiosk id is required.');
+    expect(fleet?.validate?.({ ...row, secondsSinceLastPing: -1 })).toBe(
+      'Seconds since the last heartbeat must be 0 or more.'
     );
   });
 });

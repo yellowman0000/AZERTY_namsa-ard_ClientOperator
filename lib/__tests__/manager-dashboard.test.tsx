@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { ReviewBadges, ReviewSummaryCards, ReviewTable } from '../../app/manager/operations-review-table';
+import { ReviewBadges, ReviewSummaryCards, ReviewTable } from '../../app/manager/manager-dashboard';
 import { formatPercent, formatSignedAmount } from '../../app/manager/format';
 import {
   summarizeReconciliation,

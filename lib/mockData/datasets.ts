@@ -110,10 +110,10 @@ const WATER_TYPES = [
 
 /* ---------- datasets ---------- */
 
-/** `/manager/operations-review`: cards, charts, daily table, records table, receipts. */
+/** `/manager/dashboard`: cards, charts, daily table, records table, receipts. */
 const reconciliation: DatasetSchema = {
   id: 'reconciliation',
-  title: 'Operations review records',
+  title: 'Manager dashboard records',
   description:
     'Feeds the KPI cards, both charts, the daily metrics table and the records table — including anomaly/shortfall badges and the receipt column.',
   fields: [
@@ -186,6 +186,52 @@ const reconciliation: DatasetSchema = {
     }
     if (typeof row.expectedRevenue !== 'number' || row.expectedRevenue <= 0) {
       return 'Expected revenue must be greater than 0.';
+    }
+    return null;
+  },
+};
+
+/**
+ * `/manager/dashboard` kiosk status strip: one row per kiosk, just the id, the
+ * ONLINE/OFFLINE status and how many seconds ago its last heartbeat arrived
+ * (the reference strip's 4 s / 19 s / 48 s trio, no location names).
+ */
+const kioskFleet: DatasetSchema = {
+  id: 'kioskFleet',
+  title: 'Kiosk fleet status',
+  description:
+    'Feeds the per-kiosk heartbeat cards on the manager dashboard: kiosk id, ONLINE/OFFLINE and seconds since the last heartbeat.',
+  fields: [
+    text('kioskId', 'Kiosk id'),
+    choice('status', 'Status', [
+      { value: 'ONLINE', label: 'ONLINE' },
+      { value: 'OFFLINE', label: 'OFFLINE' },
+    ]),
+    {
+      key: 'secondsSinceLastPing',
+      label: 'Seconds since last heartbeat',
+      type: 'number',
+      width: 'half',
+      min: 0,
+      step: 1,
+      help: 'Shown as “(Ns ago)”.',
+    },
+  ],
+  seeds: () => [
+    { kioskId: 'KIOSK-001', status: 'ONLINE', secondsSinceLastPing: 4 },
+    { kioskId: 'KIOSK-002', status: 'ONLINE', secondsSinceLastPing: 19 },
+    { kioskId: 'KIOSK-003', status: 'OFFLINE', secondsSinceLastPing: 48 },
+  ],
+  makeRow: ({ index }) => ({
+    kioskId: `KIOSK-${String(4 + index).padStart(3, '0')}`,
+    status: 'ONLINE',
+    secondsSinceLastPing: 2,
+  }),
+  validate: (row) => {
+    if (String(row.kioskId ?? '').trim() === '') return 'Kiosk id is required.';
+    const seconds = row.secondsSinceLastPing;
+    if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds < 0) {
+      return 'Seconds since the last heartbeat must be 0 or more.';
     }
     return null;
   },
@@ -613,6 +659,7 @@ const notice: DatasetSchema = {
 
 export const MOCK_DATASETS: readonly DatasetSchema[] = [
   reconciliation,
+  kioskFleet,
   logs,
   inspection,
   stakeholder,

@@ -17,6 +17,7 @@ import {
   type VerificationStatus,
 } from '../logs';
 import type { ReconciliationRecord } from '../reconciliation';
+import type { KioskStatusRecord } from '../kioskStatus';
 import type { StakeholderAnalytics } from '../stakeholderAnalytics';
 import { demoDigest, localDay } from './datasets';
 import type { FixtureRow, FixtureValue, MockSnapshot } from './types';
@@ -73,7 +74,7 @@ export interface RangeQuery {
   endDate?: string;
 }
 
-/* ---------- operations review ---------- */
+/* ---------- manager dashboard ---------- */
 
 export function toReconciliationRecord(row: FixtureRow): ReconciliationRecord {
   const recordedAt = fixtureIso(row.recordedAt);
@@ -384,5 +385,42 @@ export function selectStakeholderAnalytics(
       subsidizedVolumeLiters: readNumber(row.subsidizedVolumeLiters) ?? 0,
       commercialSalesVolumeLiters: readNumber(row.commercialSalesVolumeLiters) ?? 0,
     },
+  };
+}
+
+/* ---------- manager dashboard: kiosk fleet status ---------- */
+
+/**
+ * Fixture rows → the dashboard's per-kiosk heartbeat cards.
+ *
+ * Rows are editable, so half-typed values fall back instead of throwing: an
+ * unknown status reads as `ONLINE`, an unreadable age as `null` (shown as
+ * “never”). Rows are sorted by kiosk id so the cards never jump around while
+ * the panel is being edited.
+ */
+export function selectKioskFleet(rows: readonly FixtureRow[]): {
+  kiosks: KioskStatusRecord[];
+  onlineCount: number;
+} {
+  const kiosks = rows
+    .map((row) => {
+      const seconds = readNumber(row.secondsSinceLastPing);
+      return {
+        kioskId: readText(row.kioskId),
+        status:
+          readText(row.status).toUpperCase() === 'OFFLINE'
+            ? ('OFFLINE' as const)
+            : ('ONLINE' as const),
+        lastHeartbeat: null,
+        secondsSinceLastPing:
+          seconds !== null && seconds >= 0 ? Math.round(seconds) : null,
+      };
+    })
+    .filter((kiosk) => kiosk.kioskId !== '')
+    .sort((a, b) => a.kioskId.localeCompare(b.kioskId));
+
+  return {
+    kiosks,
+    onlineCount: kiosks.filter((kiosk) => kiosk.status === 'ONLINE').length,
   };
 }

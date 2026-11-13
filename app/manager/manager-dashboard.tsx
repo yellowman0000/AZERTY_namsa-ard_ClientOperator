@@ -4,8 +4,10 @@ import Link from 'next/link';
 import { useCallback, useMemo, useState } from 'react';
 import { describeRange } from '../../lib/dateRange';
 import { useDashboardData } from '../../lib/useDashboardData';
+import { useKioskStatuses } from '../../lib/useKioskStatuses';
 import { DateRangeFilter } from './date-range-filter';
 import { DashboardCharts, DailyMetricsTable } from './dashboard-metrics';
+import { KioskStatusStrip } from './kiosk-status-strip';
 import { ReportMenu } from './report-menu';
 import LogInspectionModal, { ReceiptStatus } from './log-inspection-modal';
 import { downloadReport, type ReportFormat } from '../../lib/reports';
@@ -94,7 +96,7 @@ export function ReviewBadges({ record }: { record: ReconciliationRecord }) {
 }
 
 /**
- * The Operations Review table. Rows the server flagged as anomalous
+ * The manager dashboard reconciliation table. Rows the server flagged as anomalous
  * (`isAnomaly === true`) or where the reported cash is short of the expected
  * revenue (`variance < 0`) are highlighted and carry warning badges.
  */
@@ -265,7 +267,10 @@ export function ReviewSummaryCards({ summary }: { summary: ReviewSummary }) {
 }
 
 /**
- * Operations dashboard for Operation Managers (Stories 04, 06 and 07).
+ * Manager dashboard for Operation Managers (Stories 04, 06 and 07).
+ *
+ * The kiosk status strip at the top is fleet-wide and current, so it is not
+ * bound to the date filter: it polls the server's heartbeat snapshot.
  *
  * The date filter state lives in `useDashboardData` (Story 06): a preset or an
  * applied custom range immediately reloads the summary cards, the daily
@@ -274,8 +279,9 @@ export function ReviewSummaryCards({ summary }: { summary: ReviewSummary }) {
  * The server interprets the metrics, so this view only highlights flags and
  * never recomputes the anomaly or revenue rules itself.
  */
-export default function OperationsReview() {
+export default function ManagerDashboard() {
   const dashboard = useDashboardData();
+  const kioskStatus = useKioskStatuses();
   const [flaggedOnly, setFlaggedOnly] = useState(false);
   const [awaitingOnly, setAwaitingOnly] = useState(false);
   const [reviewingId, setReviewingId] = useState<string | null>(null);
@@ -351,17 +357,27 @@ export default function OperationsReview() {
       <section className="operator-dashboard">
         <div className="operator-heading">
           <div>
-            <p className="eyebrow">OPERATIONS · TRIAGE</p>
-            <h1>Operations review</h1>
+            <p className="eyebrow">OPERATIONS · OVERVIEW</p>
+            <h1>Manager dashboard</h1>
             <p className="heading-copy">
-              Daily logs checked against expected revenue and the server&apos;s anomaly
-              classification. Records the server flagged, and records where reported cash came in
-              below the expected revenue, are highlighted for triage. Review each operator receipt
-              and accept it to add it to the Google Sheet. The date filter bounds every table and
-              graph on this page.
+              Kiosk heartbeat status, then daily logs checked against expected revenue and the
+              server&apos;s anomaly classification. Records the server flagged, and records where
+              reported cash came in below the expected revenue, are highlighted for triage. Review
+              each operator receipt and accept it to add it to the Google Sheet. The date filter
+              bounds every table and graph below; the kiosk status row is always current.
             </p>
           </div>
         </div>
+
+        <KioskStatusStrip
+          kiosks={kioskStatus.kiosks}
+          onlineCount={kioskStatus.onlineCount}
+          staleAfterSeconds={kioskStatus.staleAfterSeconds}
+          updatedAt={kioskStatus.updatedAt}
+          loading={kioskStatus.loading}
+          error={kioskStatus.error}
+          onRefresh={kioskStatus.refresh}
+        />
 
         <DateRangeFilter
           preset={dashboard.preset}

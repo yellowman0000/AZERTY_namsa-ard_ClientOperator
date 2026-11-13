@@ -1333,7 +1333,7 @@ input {
   gap: 10px;
 }
 
-/* ---------- Operations review (Operation Managers) ---------- */
+/* ---------- Manager dashboard (Operation Managers) ---------- */
 
 .review-summary {
   display: grid;
@@ -1790,6 +1790,139 @@ input {
   font-size: 11px;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+}
+
+/* ---------- Kiosk status strip (manager dashboard) ---------- */
+
+.kiosk-status {
+  margin-bottom: 26px;
+}
+
+.kiosk-status-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px 24px;
+  margin-bottom: 14px;
+}
+
+.kiosk-status-head h2 {
+  margin: 0;
+  font-size: 20px;
+  letter-spacing: -0.02em;
+}
+
+.kiosk-status-copy {
+  margin: 4px 0 0;
+  color: #5c7480;
+  font-size: 12px;
+}
+
+.kiosk-status-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+}
+
+.kiosk-status-summary {
+  color: #116643;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.kiosk-status-updated {
+  color: #71838a;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.kiosk-status-error {
+  margin-bottom: 12px;
+}
+
+.kiosk-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.kiosk-card {
+  display: grid;
+  gap: 7px;
+  padding: 14px 16px;
+  border: 1px solid rgba(11, 37, 48, 0.08);
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 6px 18px rgba(11, 37, 48, 0.04);
+}
+
+.kiosk-card-id {
+  color: #647982;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.kiosk-card-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.kiosk-card-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.kiosk-card-ago {
+  color: #71838a;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0;
+}
+
+.kiosk-card-online .kiosk-card-status {
+  color: #116643;
+}
+
+.kiosk-card-online .kiosk-card-dot {
+  background: var(--mint);
+  box-shadow: 0 0 0 4px rgba(43, 196, 138, 0.15);
+}
+
+.kiosk-card-offline .kiosk-card-status {
+  color: var(--coral);
+}
+
+.kiosk-card-offline .kiosk-card-dot {
+  background: var(--coral);
+  box-shadow: 0 0 0 4px rgba(200, 53, 46, 0.12);
+}
+
+@media (max-width: 720px) {
+  .kiosk-status-head {
+    align-items: flex-start;
+  }
+
+  .kiosk-grid {
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  }
+}
+
+@media (max-width: 520px) {
+  .kiosk-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* ---------- Stakeholder analytics (Story 09) ---------- */

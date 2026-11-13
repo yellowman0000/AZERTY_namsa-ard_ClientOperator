@@ -432,8 +432,8 @@ export default function OperatorConsole() {
           <Link className="nav-link" href="/manager">
             Historical logs
           </Link>
-          <Link className="nav-link" href="/manager/operations-review">
-            Operations review
+          <Link className="nav-link" href="/manager/dashboard">
+            Manager dashboard
           </Link>
           <Link className="nav-link" href="/manager/stakeholder-analytics">
             Stakeholder analytics

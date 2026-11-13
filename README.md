@@ -22,9 +22,21 @@ The modal has no edit controls, and both endpoints are GET-only. This view needs
 
 Checksum format and dispatcher behavior are documented in [docs/CHECKSUM_AND_DISPATCHER.md](./docs/CHECKSUM_AND_DISPATCHER.md).
 
-## Operations review (Operation Managers)
+## Manager dashboard (Operation Managers)
 
-`/manager/operations-review` (linked as **Operations review** in the manager views) is the metric dashboard and triage table for the reconciliation engine. It reads `GET /api/kiosk/reconciliation`, which returns each daily log with its interpreted metrics: `expectedRevenue` (meter volume × unit price), `variance` (`reportedCash − expectedRevenue`), and `isAnomaly` (the server's anomaly classification flag for the record).
+`/manager/dashboard` (linked as **Manager dashboard** in the manager views) is the operations dashboard for the fleet and the reconciliation engine. The old `/manager/operations-review` URL redirects here (temporary 307 configured in `next.config.ts`).
+
+### Kiosk status (Story 01)
+
+A status strip at the top shows **one card per registered kiosk** — the kiosk id, `ONLINE` / `OFFLINE` with a coloured heartbeat dot, and how long ago the last heartbeat arrived (`(4s ago)`, or `(never)`). There are no location names: the server registry stores the kiosk id only.
+
+- The dashboard polls `GET /api/kiosk/status` every 10 seconds (the kiosk heartbeat cadence). The server marks a kiosk `ONLINE` while its last heartbeat is at most 30 seconds old, so a disconnect shows up within ~40 seconds.
+- The strip is **not** bound to the date filter — fleet state is always current. Loading, empty-fleet and error (+**Try again**) states are handled inline; a failed poll keeps the last known cards on screen.
+- **Refresh** re-reads immediately. The view is read-only; the server's 5-second sweeper persists `OFFLINE` transitions.
+
+### Reconciliation review
+
+The dashboard also reads `GET /api/kiosk/reconciliation`, which returns each daily log with its interpreted metrics: `expectedRevenue` (meter volume × unit price), `variance` (`reportedCash − expectedRevenue`), and `isAnomaly` (the server's anomaly classification flag for the record).
 
 - Rows the server flagged as anomalous are highlighted amber.
 - Rows with a **Revenue shortfall** (`variance < 0`) are highlighted red, because cash below the expected revenue is the most urgent case.
@@ -35,7 +47,7 @@ Checksum format and dispatcher behavior are documented in [docs/CHECKSUM_AND_DIS
 
 ### Date filter binding (Story 06)
 
-The date filter above the dashboard bounds **every** table and graph on the page: the summary cards, the daily metrics table, both charts and the records table all reload from the same filtered request.
+The date filter bounds **every** table and graph on the page — the summary cards, the daily metrics table, both charts and the records table all reload from the same filtered request. The kiosk status strip above it is fleet-wide and always current, so it is deliberately outside the filter.
 
 - Presets **All time**, **Today**, **Last 7 Days** and **This Month** apply immediately (the presets use the manager's local calendar days).
 - **Start Date** / **End Date** edit a draft range; **Apply** is enabled only for a valid range. A missing bound, a malformed date or a start date after the end date shows an inline error, and an invalid range is never sent to the server.
@@ -101,7 +113,8 @@ loaded).
 
 | Dataset | Drives |
 |---|---|
-| Operations review records | KPI cards, both charts, daily metrics table/totals, records table, badges, receipt column, all empty states |
+| Manager dashboard records | KPI cards, both charts, daily metrics table/totals, records table, badges, receipt column, all empty states |
+| Kiosk fleet status | The kiosk status cards (id, ONLINE/OFFLINE, heartbeat age) on the manager dashboard |
 | Historical logs | Log table, “N logs shown”, cursor pagination |
 | Log inspection | The read-only inspection modal, including the verified / mismatch / no-checksum verdicts |
 | Stakeholder analytics | Month payload: 3 KPI cards and both comparison tabs |

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, mock } from 'bun:test';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { ReviewTable } from '../../app/manager/operations-review-table';
+import { ReviewTable } from '../../app/manager/manager-dashboard';
 import { InspectionBody, ReceiptStatus } from '../../app/manager/log-inspection-modal';
 import { acceptReceipt, type InspectedLog } from '../logs';
 import type { ReconciliationRecord } from '../reconciliation';

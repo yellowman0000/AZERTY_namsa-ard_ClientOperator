@@ -151,8 +151,8 @@ export default function StakeholderAnalyticsView() {
           <Link className="nav-link" href="/manager">
             Historical logs
           </Link>
-          <Link className="nav-link" href="/manager/operations-review">
-            Operations review
+          <Link className="nav-link" href="/manager/dashboard">
+            Manager dashboard
           </Link>
         </nav>
       </header>

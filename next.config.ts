@@ -1,6 +1,17 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  async redirects() {
+    // The Operations review page became the manager dashboard; keep old links
+    // (README screenshots, bookmarks, the previous smoke scripts) working.
+    return [
+      {
+        source: '/manager/operations-review',
+        destination: '/manager/dashboard',
+        permanent: false,
+      },
+    ];
+  },
   async rewrites() {
     const apiBaseUrl = (
       process.env.API_BASE_URL ||

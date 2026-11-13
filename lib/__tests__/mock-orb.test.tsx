@@ -110,7 +110,7 @@ describe('mock panel', () => {
     const { active } = snapshots();
     const html = renderPanel(active);
 
-    expect(html).toContain('Operations review records');
+    expect(html).toContain('Manager dashboard records');
     expect(html).toContain('Meter volume (L)');
     expect(html).toContain('id="mock-reconciliation-0-meterVolume"');
     expect(html).toContain('type="number"');
@@ -130,7 +130,7 @@ describe('mock panel', () => {
     expect(html).toContain('aria-checked="false"');
     expect(html).toContain('not shown yet');
     expect(html).toContain('No rows yet');
-    expect(html).toContain('0 rows across 0 of 9 datasets');
+    expect(html).toContain('0 rows across 0 of 10 datasets');
   });
 
   it('surfaces a row validation message', () => {
